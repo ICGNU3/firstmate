@@ -35,10 +35,7 @@ case "${1:-}" in
     exit 0
     ;;
   display-message)
-    case "$*" in
-      *'#{cursor_y}'*) printf '0\n' ;;
-      *) printf 'firstmate\n' ;;
-    esac
+    printf 'firstmate\n'
     exit 0
     ;;
   capture-pane)

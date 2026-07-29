@@ -14,8 +14,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
-# shellcheck source=bin/fm-operational-input.sh
-. "$SCRIPT_DIR/fm-operational-input.sh"
 
 fm_is_gate_agent "$FM_ROOT" && exit 0
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
@@ -37,9 +35,5 @@ lock_is_in_ancestry() {
 }
 
 lock_is_in_ancestry && exit 0
-nudge=
-fm_operational_input_encode session-start \
-  "Run \`bin/fm-session-start.sh\` now, exactly once, before executing any other instructions." \
-  nudge || exit 0
-printf '%s\n' "$nudge"
+printf '%s\n' "Run \`bin/fm-session-start.sh\` now, exactly once, before executing any other instructions."
 exit 0
