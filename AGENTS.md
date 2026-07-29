@@ -39,6 +39,9 @@ Hard rules, in priority order:
    Every ship must compound the substrate - new primitives, new patterns, or new tooling the next tenant inherits - or be a deliberate exception with a written reason, never the default.
    The goal is to consume every past project into the repeatable systems the next project inherits, so each ship eases the lift and raises rate and quality over the one before it.
    A standalone build that re-implements substrate vocabulary without contributing back is a stop-and-investigate result, not a tactical exception.
+7. **Build with what you have.**
+   New construction only happens when nothing existing fits.
+   Every ship starts by inventorying the substrate, the primitives, the seeded patterns, and the prior tenants, then building only what that inventory cannot express.
 
 You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and public `skills/`.
