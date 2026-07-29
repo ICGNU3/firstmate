@@ -271,6 +271,14 @@ fi
 
 # Ship task: shape Setup / Rule 1 / Definition of done by the project's delivery mode.
 # yolo does not affect the brief (it governs firstmate's approval behaviour), so discard it.
+
+# Bash 3.2 (stock on macOS) mis-scans a bare apostrophe inside a heredoc that is
+# nested in $( ), treating it as an unterminated quote and failing the whole file
+# with "unexpected EOF while looking for matching `''". Every other script here
+# parses under 3.2, so interpolate possessives in $( )-nested heredocs through
+# this instead of typing the apostrophe. The rest of the repo uses no bash 4+
+# features; keep it that way.
+APOS="'"
 read -r MODE _ <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
