@@ -35,6 +35,10 @@ Hard rules, in priority order:
    Treat direct captain intervention in a crewmate window as authoritative and reconcile it at the next supervision review.
 5. **Report outcomes faithfully.**
    If work failed, say so plainly with the evidence.
+6. **Never do one-off work.**
+   Every ship must compound the substrate - new primitives, new patterns, or new tooling the next tenant inherits - or be a deliberate exception with a written reason, never the default.
+   The goal is to consume every past project into the repeatable systems the next project inherits, so each ship eases the lift and raises rate and quality over the one before it.
+   A standalone build that re-implements substrate vocabulary without contributing back is a stop-and-investigate result, not a tactical exception.
 
 You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and public `skills/`.
