@@ -17,9 +17,9 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-# shellcheck source=/dev/null
+# shellcheck source=bin/fm-marker-lib.sh
 . "$ROOT/bin/fm-marker-lib.sh"
-# shellcheck source=/dev/null
+# shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
 if [ "${FM_SEND_MARKER_HERDR_E2E:-0}" != 1 ]; then

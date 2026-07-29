@@ -34,18 +34,13 @@ RC=$?
 [ "$RC" -eq 2 ] || exit 0
 
 REASON=$(cat "$ERR" 2>/dev/null || true)
-[ -n "$REASON" ] || REASON='tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn'
-# shellcheck source=bin/fm-operational-input.sh
-. "$ROOT/bin/fm-operational-input.sh"
-fm_operational_input_encode turn-end-guard \
-  "TURN WOULD END BLIND - supervision is off. Repair missing watcher supervision according to the session-start operating block before ending the turn.
-
-$REASON" \
-  PROMPT || exit 0
+[ -n "$REASON" ] || REASON='tasks in flight, no live watcher - resume supervision according to the session-start operating block before ending the turn'
 
 GROK_TURNEND_GUARD_ACTIVE=1 \
   GROK_HOME="${GROK_HOME:-$HOME/.grok}" \
   grok --resume "$SESSION_ID" \
     --cwd "$ROOT" \
     --output-format plain \
-    -p "$PROMPT" >/dev/null 2>&1 || true
+    -p "TURN WOULD END BLIND - supervision is off. Resume supervision according to the session-start operating block before ending the turn.
+
+$REASON" >/dev/null 2>&1 || true
