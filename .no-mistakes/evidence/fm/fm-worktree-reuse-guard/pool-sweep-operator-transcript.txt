@@ -1,0 +1,62 @@
+############################################################
+# Scenario: a pooled worktree is clean, but its HEAD carries
+# committed lane work that no branch, tag or rescue ref reaches.
+############################################################
+
+=== 1. Shipped state: no config/worktree-pool-sweep file ===
+$ ls $FM_HOME/config/
+crew-harness
+$ fm spawn demo-default <project>
+warning: /tmp/sweep-evidence.TJ9yoB/a/home/data/demo-default/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned demo-default harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-demo-default worktree=/tmp/sweep-evidence.TJ9yoB/a/pool
+[exit 0]  <- acquisition path unchanged; the sweep never ran
+
+=== 2. Operator activates the mitigation ===
+$ echo on > $FM_HOME/config/worktree-pool-sweep
+$ git -C <pool> log --oneline -1   # the work at risk
+5baa05f abandoned work
+$ fm spawn demo-enabled <project>
+unsafe: HEAD contains commits not reachable from durable refs in /tmp/sweep-evidence.TJ9yoB/b/pool
+error: worktree pool sweep refused worktree /tmp/sweep-evidence.TJ9yoB/b/pool (exit 2); inspect unsafe state or disable sweep in config/worktree-pool-sweep
+[exit 1]  <- spawn aborted before reusing the worktree
+$ cat <pool>/abandoned.txt   # work still intact after the refusal
+abandoned lane work
+
+=== 3. Explicit off ===
+$ echo off > $FM_HOME/config/worktree-pool-sweep
+$ fm spawn demo-off <project>
+warning: /tmp/sweep-evidence.TJ9yoB/c/home/data/demo-off/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned demo-off harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-demo-off worktree=/tmp/sweep-evidence.TJ9yoB/c/pool
+[exit 0]  <- 'off' leaves the sweep inert
+
+############################################################
+# Direct sweep invocation: one diagnostic per condition
+############################################################
+
+$ fm-treehouse-pool-sweep.sh <dirty pool>
+unsafe: dirty worktree at /tmp/sweep-evidence.TJ9yoB/d/dirty
+[exit 1]
+
+$ fm-treehouse-pool-sweep.sh <pool detached on unreferenced commits>
+unsafe: HEAD contains commits not reachable from durable refs in /tmp/sweep-evidence.TJ9yoB/d/orphan
+[exit 2]
+
+$ fm-treehouse-pool-sweep.sh <pool whose HEAD cannot be inspected>
+unsafe: cannot inspect HEAD at /tmp/sweep-evidence.TJ9yoB/d/unborn
+[exit 1]
+
+$ fm-treehouse-pool-sweep.sh <pool with a corrupt ref database>
+unsafe: cannot compute HEAD reachability in /tmp/sweep-evidence.TJ9yoB/d/corrupt
+[exit 2]
+
+$ fm-treehouse-pool-sweep.sh <path that does not exist>
+[exit 4]
+
+$ fm-treehouse-pool-sweep.sh   # no argument
+error: worktree path required
+fm-treehouse-pool-sweep.sh - Pre-acquire worktree pool safety sweep
+[exit 64]
+
+$ fm-treehouse-pool-sweep.sh <pool covered only by remote-tracking refs>
+unsafe: HEAD commits covered only by remote-tracking refs (prunable) in /tmp/sweep-remote.LaiY/repo
+[exit 3]
