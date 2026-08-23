@@ -172,8 +172,41 @@ test_off_value_keeps_the_spawn_path_open() {
   pass "an explicit off leaves the spawn acquisition path unchanged"
 }
 
+# An enabled sweep whose script cannot be executed must not silently degrade into
+# "no sweep ran": the spawn would then hand the unswept pool worktree to the hard
+# reset in freshen_spawn_worktree_base, discarding exactly the state the operator
+# enabled the sweep to protect.
+test_enabled_sweep_with_unrunnable_script_fails_closed() {
+  local rec id out status bindir
+  id='sweep-wiring-nonexec-r4'
+  rec=$(make_case enabled-nonexec "$id")
+  read_case_record "$rec"
+  printf 'on\n' > "$HOME_DIR/config/worktree-pool-sweep"
+
+  # Run the real spawn out of a copied bin/ so the sweep script can be made
+  # unrunnable without touching the repo checkout.
+  bindir="$TMP_ROOT/enabled-nonexec/bin"
+  cp -R "$ROOT/bin" "$bindir"
+  chmod -x "$bindir/fm-treehouse-pool-sweep.sh"
+
+  out=$(SPAWN="$bindir/fm-spawn.sh" run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "spawn succeeded with the sweep enabled but its script not executable"
+  assert_contains "$out" "worktree pool sweep is enabled" \
+    "spawn did not tell the operator the enabled sweep could not run"
+  assert_contains "$out" "fm-treehouse-pool-sweep.sh" \
+    "the diagnostic did not name the sweep script that could not run"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$ORPHAN_SHA" ] \
+    || fail "spawn reset the unswept pooled worktree instead of failing closed"
+  assert_grep 'abandoned lane work' "$POOL_DIR/abandoned.txt" \
+    "spawn discarded the unswept pool work it never inspected"
+  pass "an enabled sweep whose script cannot run fails the spawn closed"
+}
+
 test_shipped_deactivated
 test_enabled_sweep_refuses_the_spawn
 test_off_value_keeps_the_spawn_path_open
+test_enabled_sweep_with_unrunnable_script_fails_closed
 
 echo "# all fm-spawn-pool-sweep-wiring tests passed"

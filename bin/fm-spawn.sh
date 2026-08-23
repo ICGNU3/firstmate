@@ -2260,7 +2260,24 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 
   validate_spawn_worktree "treehouse get" "$T"
 
-  if [ -x "$SCRIPT_DIR/fm-treehouse-pool-sweep.sh" ]; then
+  sweep_enabled=0
+  if [ -f "$CONFIG/worktree-pool-sweep" ]; then
+    sweep_val=$(tr -d '[:space:]' < "$CONFIG/worktree-pool-sweep" 2>/dev/null) || sweep_val=''
+    if [ -n "$sweep_val" ] && [ "$sweep_val" != off ]; then
+      sweep_enabled=1
+    fi
+  fi
+
+  if [ "$sweep_enabled" -eq 1 ]; then
+    # An enabled sweep that cannot run is not a reason to reuse the worktree
+    # anyway: skipping here would hand an unswept pool worktree straight to the
+    # hard reset in freshen_spawn_worktree_base, which is exactly the outcome the
+    # operator enabled the sweep to prevent. Fail closed instead.
+    if [ ! -x "$SCRIPT_DIR/fm-treehouse-pool-sweep.sh" ]; then
+      echo "error: worktree pool sweep is enabled in config/worktree-pool-sweep but $SCRIPT_DIR/fm-treehouse-pool-sweep.sh is missing or not executable" >&2
+      echo "error: the pool slot for $WT stays held and window $T stays open because its state was never swept; restore the sweep script or disable the sweep in config/worktree-pool-sweep" >&2
+      exit 1
+    fi
     sweep_rc=0
     FM_CONFIG_OVERRIDE="$CONFIG" \
       "$SCRIPT_DIR/fm-treehouse-pool-sweep.sh" "$WT" || sweep_rc=$?

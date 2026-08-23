@@ -141,6 +141,8 @@ When active, `bin/fm-spawn.sh` runs `bin/fm-treehouse-pool-sweep.sh` against the
 
 It also fails closed when git cannot answer a probe - an unreadable HEAD, a corrupt ref database, an unreadable object - refusing under the same exit code as the negative answer it resembles but with its own diagnostic.
 
+An enable that cannot run also aborts the spawn: when this file activates the sweep but `bin/fm-treehouse-pool-sweep.sh` is missing or not executable, the spawn fails closed with a diagnostic naming the script rather than reusing a worktree nothing inspected.
+
 A refusal aborts the spawn with an error naming the worktree, the sweep exit code, and this config file.
 The refused pool slot stays held and its task window stays open, and the error says so: the sweep refuses precisely when the worktree may hold work nothing else references, so returning the slot there would discard exactly that work.
 An operator returns it by hand once its work is safe; the exit codes, diagnostics, and the remote-tracking-ref reachability rules are owned by `bin/fm-treehouse-pool-sweep.sh`'s header (`bin/fm-treehouse-pool-sweep.sh --help`).
