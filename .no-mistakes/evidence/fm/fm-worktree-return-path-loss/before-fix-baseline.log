@@ -1,0 +1,30 @@
+treehouse v2.3.0
+
+=== CASE 1: worker commits from a DETACHED HEAD, then the pooled copy is returned ===
+Created /private/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/detached/repo/treehouse.toml
+🌳 Setting up worktree...
+🌳 Leased worktree at /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/detached/pool/.treehouse/repo-651f43/1/repo. Run 'treehouse return /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/detached/pool/.treehouse/repo-651f43/1/repo' to release it.
+leased pooled copy: /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/detached/pool/.treehouse/repo-651f43/1/repo
+HEAD state on lease: detached (no branch)
+worker commit: ad68bc520230d2f4c21204c20aa960dcb80269b1 worker commit before branching
+--- fm-teardown.sh detached-return --force ---
+teardown detached-return complete (window firstmate:fm-detached-return, worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/detached/pool/.treehouse/repo-651f43/1/repo)
+Backlog: detached-return just finished. Run tasks-axi done detached-return --note "local main", then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+--- after the return: is the commit still reachable in the project repo? ---
+  ad68bc520230d2f4c21204c20aa960dcb80269b1 worker commit before branching
+
+=== CASE 2: worker commits on an ATTACHED BRANCH (no rescue ref should appear) ===
+Created /private/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/attached/repo/treehouse.toml
+🌳 Setting up worktree...
+🌳 Leased worktree at /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/attached/pool/.treehouse/repo-0bcbd7/1/repo. Run 'treehouse return /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/attached/pool/.treehouse/repo-0bcbd7/1/repo' to release it.
+--- fm-teardown.sh branch-return --force ---
+teardown branch-return complete (window firstmate:fm-branch-return, worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.KjHzSC/attached/pool/.treehouse/repo-0bcbd7/1/repo)
+Backlog: branch-return just finished. Run tasks-axi done branch-return --note "local main", then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+fatal: ambiguous argument 'refs/heads/fm/evidence-branch': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+branch tip after return: refs/heads/fm/evidence-branch (worker commit 19de12ce4ccc61467e00fdf2731c0c2dff79f361)
+rescue refs created: []
+
+=== CASE 3: reachability cannot be determined (unreadable worktree) - return must be refused ===
+--- fm-teardown.sh unreadable-return --force ---

@@ -1,0 +1,22 @@
+BEFORE THE FIX (base commit 038d0f7) - same operator scenario
+-------------------------------------------------------------
+  === detached-worker: worker leased pooled worktree ===
+  worktree: /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.LNABbT/detached-worker/pool/.treehouse/repo-8528fb/1/repo
+  HEAD state: (detached)
+  worker committed d3be0a42071388f02a025b890d05530123666926 ("worker commit for detached-worker")
+  HEAD state now: (detached - commit has no branch)
+  
+  === detached-worker: operator runs fm-teardown.sh detached-worker --force ===
+  🌳 Worktree returned to pool.
+  teardown detached-worker complete (window firstmate:fm-detached-worker, worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.LNABbT/detached-worker/pool/.treehouse/repo-8528fb/1/repo)
+  Backlog: detached-worker just finished. Run tasks-axi done detached-worker --note "local main", then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+  [fm-teardown.sh exit: 0]
+  
+  === detached-worker: after the pool slot was returned ===
+  refs in project repo containing d3be0a420713:
+  commit still recoverable: git -C <project> show d3be0a420713 -> worker commit for detached-worker
+  file content preserved: work by detached-worker
+  Created /private/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.LNABbT/branch-worker/repo/treehouse.toml
+
+  => No ref in the project repo contains the worker's commit after the pooled slot
+     was returned. The commit is dangling and gc-eligible: the work is effectively lost.

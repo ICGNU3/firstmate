@@ -1,0 +1,47 @@
+Created /private/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.stnWBc/detached-worker/repo/treehouse.toml
+
+=== detached-worker: worker leased pooled worktree ===
+worktree: /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.stnWBc/detached-worker/pool/.treehouse/repo-73c96a/1/repo
+HEAD state: (detached)
+worker committed 53f0609a8da8a8cea59e0094e7d69d287849b9ce ("worker commit for detached-worker")
+HEAD state now: (detached - commit has no branch)
+
+=== detached-worker: operator runs fm-teardown.sh detached-worker --force ===
+RESCUED: committed work at 53f0609a8da8a8cea59e0094e7d69d287849b9ce had no durable ref; created refs/firstmate/rescue/detached-worker/20260824T194723Z before returning /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.stnWBc/detached-worker/pool/.treehouse/repo-73c96a/1/repo.
+🌳 Worktree returned to pool.
+teardown detached-worker complete (window firstmate:fm-detached-worker, worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.stnWBc/detached-worker/pool/.treehouse/repo-73c96a/1/repo)
+Backlog: detached-worker just finished. Run tasks-axi done detached-worker --note "local main", then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+[fm-teardown.sh exit: 0]
+
+=== detached-worker: after the pool slot was returned ===
+refs in project repo containing 53f0609a8da8:
+  refs/firstmate/rescue/detached-worker/20260824T194723Z
+commit still recoverable: git -C <project> show 53f0609a8da8 -> worker commit for detached-worker
+file content preserved: work by detached-worker
+Created /private/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.stnWBc/branch-worker/repo/treehouse.toml
+
+=== branch-worker: worker leased pooled worktree ===
+worktree: /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.stnWBc/branch-worker/pool/.treehouse/repo-73b395/1/repo
+HEAD state: (detached)
+worker committed 45a364ff422b4b74f036b2d26f1cbb7ed0b489d5 ("worker commit for branch-worker")
+HEAD state now: refs/heads/fm/branch-worker
+
+=== branch-worker: operator runs fm-teardown.sh branch-worker --force ===
+🌳 Worktree returned to pool.
+teardown branch-worker complete (window firstmate:fm-branch-worker, worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-rescue-demo.stnWBc/branch-worker/pool/.treehouse/repo-73b395/1/repo)
+Backlog: branch-worker just finished. Run tasks-axi done branch-worker --note "local main", then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+[fm-teardown.sh exit: 0]
+
+=== branch-worker: after the pool slot was returned ===
+refs in project repo containing 45a364ff422b:
+  refs/heads/fm/branch-worker
+commit still recoverable: git -C <project> show 45a364ff422b -> worker commit for branch-worker
+file content preserved: work by branch-worker
+
+=== refusal: reachability cannot be determined ===
+REFUSED: cannot determine committed-work reachability for /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T//fm-rescue-demo.stnWBc/refuse/broken-worktree: git could not resolve HEAD (fatal: not a git repository (or any of the parent directories): .git).
+teardown: worktree return refused by the committed-work guard; preserving /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T//fm-rescue-demo.stnWBc/refuse/broken-worktree and every commit it still holds
+error: treehouse return failed for worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T//fm-rescue-demo.stnWBc/refuse/broken-worktree; teardown aborted
+[fm-teardown.sh exit: 1]
+task metadata retained for retry: yes
+worktree preserved: yes

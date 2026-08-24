@@ -1,0 +1,35 @@
+treehouse v2.3.0
+
+=== CASE 1: worker commits from a DETACHED HEAD, then the pooled copy is returned ===
+Created /private/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/detached/repo/treehouse.toml
+🌳 Setting up worktree...
+🌳 Leased worktree at /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/detached/pool/.treehouse/repo-23cc06/1/repo. Run 'treehouse return /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/detached/pool/.treehouse/repo-23cc06/1/repo' to release it.
+leased pooled copy: /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/detached/pool/.treehouse/repo-23cc06/1/repo
+HEAD state on lease: detached (no branch)
+worker commit: 7b35d43a8ac4d41facb10d9dce6279f4d3e28e0e worker commit before branching
+--- fm-teardown.sh detached-return --force ---
+RESCUED: committed work at 7b35d43a8ac4d41facb10d9dce6279f4d3e28e0e had no durable ref; created refs/firstmate/rescue/detached-return/20260824T193337Z before returning /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/detached/pool/.treehouse/repo-23cc06/1/repo.
+teardown detached-return complete (window firstmate:fm-detached-return, worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/detached/pool/.treehouse/repo-23cc06/1/repo)
+Backlog: detached-return just finished. Run tasks-axi done detached-return --note "local main", then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+--- after the return: is the commit still reachable in the project repo? ---
+  reachable from refs/firstmate/rescue/detached-return/20260824T193337Z
+  7b35d43a8ac4d41facb10d9dce6279f4d3e28e0e worker commit before branching
+
+=== CASE 2: worker commits on an ATTACHED BRANCH (no rescue ref should appear) ===
+Created /private/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/attached/repo/treehouse.toml
+🌳 Setting up worktree...
+🌳 Leased worktree at /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/attached/pool/.treehouse/repo-a127a6/1/repo. Run 'treehouse return /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/attached/pool/.treehouse/repo-a127a6/1/repo' to release it.
+--- fm-teardown.sh branch-return --force ---
+teardown branch-return complete (window firstmate:fm-branch-return, worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-guard-evidence.vJ0b6S/attached/pool/.treehouse/repo-a127a6/1/repo)
+Backlog: branch-return just finished. Run tasks-axi done branch-return --note "local main", then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+branch tip after return: fc163fa74b39777c944648cf079b324fff9639bc (worker commit fc163fa74b39777c944648cf079b324fff9639bc)
+rescue refs created: []
+
+=== CASE 3: reachability cannot be determined (unreadable worktree) - return must be refused ===
+--- fm-teardown.sh unreadable-return --force ---
+REFUSED: cannot determine committed-work reachability for /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T//fm-guard-evidence.vJ0b6S/unreadable/broken-worktree: git could not resolve HEAD (fatal: not a git repository (or any of the parent directories): .git).
+teardown: worktree return refused by the committed-work guard; preserving /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T//fm-guard-evidence.vJ0b6S/unreadable/broken-worktree and every commit it still holds
+error: treehouse return failed for worktree /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T//fm-guard-evidence.vJ0b6S/unreadable/broken-worktree; teardown aborted
+teardown exit status: non-zero refusal; task metadata preserved: yes
+
+=== DONE ===
