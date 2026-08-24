@@ -1,0 +1,67 @@
+
+### 1. Start a REAL OpenCode agent in the Herdr pane w1:p2
+
+$ herdr pane run w1:p2 'opencode --mini'
+
+$ herdr agent get w1:p2
+{"agent":"opencode","agent_status":"idle"}
+
+$ herdr pane process-info --pane w1:p2
+[{"name":"opencode.exe","pid":94475}]
+
+$ bin/fm-backend.sh -> fm_backend_agent_state herdr fm-lab-fm-intent-transc-92828-5034:w1:p2
+alive
+### 2. Kill OpenCode WITHOUT its stop hook (SIGKILL), so the idle registration goes stale
+
+$ kill -KILL 94475
+
+$ herdr agent get w1:p2   # registration is retained and still says idle
+{"agent":"opencode","agent_status":"idle"}
+
+$ herdr pane process-info --pane w1:p2   # foreground is back to the login shell
+[{"name":"zsh","pid":93314}]
+
+$ fm_backend_agent_state herdr fm-lab-fm-intent-transc-92828-5034:w1:p2   # process-grounded: agent-free
+dead
+### 3. End-user command: exit the stopped agent
+
+$ bin/fm-control.sh demo exit
+already-stopped demo harness=opencode backend=herdr endpoint=fm-lab-fm-intent-transc-92828-5034:w1:p2 worktree=/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-intent.LHIN6y/wt
+(rc=0)
+
+### 4. End-user command: switch harness OpenCode -> Codex as an ordinary relaunch
+
+$ bin/fm-control.sh demo relaunch --harness codex --note 'process-kill recovery validation'
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+warning: /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-intent.LHIN6y/home/data/demo/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+relaunched demo harness=codex from=opencode model=default effort=default backend=herdr endpoint=fm-lab-fm-intent-transc-92828-5034:w1:p2 worktree=/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-intent.LHIN6y/wt
+(rc=0)
+
+### 5. Postconditions: same pane, same worktree, note intact
+
+$ grep -E 'harness|worktree|herdr_pane_id' $FM_HOME/state/demo.meta
+worktree=/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-intent.LHIN6y/wt
+harness=codex
+herdr_pane_id=w1:p2
+
+$ tail -3 $FM_HOME/data/demo/brief.md
+/var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-intent.LHIN6y/home/state/demo.inbox/handled/. A steer sent before the relaunch survives there.
+
+process-kill recovery validation
+
+$ herdr pane get w1:p2   # the endpoint was reused, never closed
+{"type":"pane_info","pane":null}
+
+$ git -C /var/folders/06/lcsdvfhd18dbxd7484yj656w0000gn/T/fm-intent.LHIN6y/wt status --short --branch
+## demo
+
+### 6. Destructive close-and-replace stays conservative on the SAME pane
+
+$ fm_backend_endpoint_closeable herdr fm-lab-fm-intent-transc-92828-5034:w1:p2  # registration-only husk evidence
+closeable=NO (rc=1) -> refuses destructive close

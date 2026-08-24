@@ -1,0 +1,4 @@
+ok - real herdr: exit on a pane with no registered agent is idempotent success
+ok - real herdr: interrupt refuses when Herdr has no registered agent
+ok - real herdr: stale idle registration over a login shell is agent-free for exit
+ok - real herdr: stale idle process-kill recovery relaunches Codex in the same pane and worktree

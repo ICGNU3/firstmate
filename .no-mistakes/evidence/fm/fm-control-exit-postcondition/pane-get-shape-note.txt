@@ -1,0 +1,22 @@
+Clarification for step 5 of fm-control-exit-relaunch-transcript.txt
+==================================================================
+
+In the transcript, `herdr pane get w1:p2` after the Codex relaunch printed:
+
+    {"type":"pane_info","pane":null}
+
+The `"pane": null` is an artifact of the jq projection used in the transcript
+(`.result | {type, pane: (.pane.id // .id)}`), not a missing pane: Herdr's
+pane_info payload does not carry the id at `.result.pane.id`.
+
+A pane that genuinely does not exist returns a completely different shape --
+an error object with no `result` at all, captured live against the same CLI:
+
+    $ herdr pane get w1:p1        # freshly provisioned lab, no panes created yet
+    {"error":{"code":"pane_not_found","message":"pane w1:p1 not found"},"id":"cli:pane:get"}
+
+So the transcript's `type: pane_info` response is positive evidence that the
+relaunch reused the endpoint instead of closing and replacing it. The smoke
+test asserts the same postcondition on exit status
+(tests/fm-control-herdr-smoke.test.sh: "relaunch removed the endpoint it was
+meant to reuse").
