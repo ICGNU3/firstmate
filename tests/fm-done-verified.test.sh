@@ -377,6 +377,93 @@ test_checks_state_is_read_from_a_real_rollup() {
   pass "the checks state is read out of a real rollup payload, per entry, with the script's own query"
 }
 
+# --- the run's result gates the verdict, it does not decorate it -------------
+# Matching heads only say validation LOOKED at this commit. A run still in
+# flight, or one that ended without accepting the work, must never verify.
+# RULE TWO: a verdict binds to the PR head it evaluated, and a later commit on
+# that PR makes it STALE - the world moved under a verdict that was true - which
+# is a different fact from a claim naming a head the PR never carried.
+test_a_moved_pr_head_makes_a_standing_verdict_stale() {
+  local dir shipped moved result
+  dir=$(make_world head-moved)
+  shipped=$(git -C "$dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/o/r/pull/7 head=%s - shipped\n' "$shipped" \
+    > "$dir/state/task-v.status"
+
+  # Establish it against the head the PR actually carries.
+  result=$(FAKE_GH_OUT="OPEN	$shipped	fm/task-v	SUCCESS" \
+    FAKE_NM_STATUS="$(nm_status fm/task-v "$shipped")" verify "$dir")
+  [ "${result%%$'\t'*}" = 0 ] || fail "setup: the honest claim did not verify: $result"
+  grep -Fq "$shipped" "$dir/state/task-v.done-verdict" \
+    || fail "the verdict did not bind the PR head it evaluated"
+
+  # The PR gains a commit. The claim was true; the verdict is now about a world
+  # that no longer exists.
+  moved=$(git -C "$dir/wt" rev-parse 'HEAD~1')
+  result=$(FAKE_GH_OUT="OPEN	$moved	fm/task-v	SUCCESS" \
+    FAKE_NM_STATUS="$(nm_status fm/task-v "$shipped")" verify "$dir")
+  [ "${result%%$'\t'*}" = 5 ] \
+    || fail "a PR that moved under an established verdict was not reported stale: $result"
+  case "${result#*$'\t'}" in stale:*) ;; *) fail "the moved head was not recorded as stale: $result" ;; esac
+
+  # With no standing verdict, the same mismatch is falsity, not staleness.
+  dir=$(make_world head-never-carried)
+  shipped=$(git -C "$dir/wt" rev-parse HEAD)
+  moved=$(git -C "$dir/wt" rev-parse 'HEAD~1')
+  printf 'done: pr=https://github.com/o/r/pull/7 head=%s - shipped\n' "$shipped" \
+    > "$dir/state/task-v.status"
+  result=$(FAKE_GH_OUT="OPEN	$moved	fm/task-v	SUCCESS" verify "$dir")
+  [ "${result%%$'\t'*}" = 4 ] \
+    || fail "a claim naming a head the PR never carried was not contradicted: $result"
+  pass "a moved PR head makes an established verdict stale, while an unbacked mismatch stays contradicted"
+}
+
+test_an_unfinished_run_never_verifies() {
+  local dir shipped result
+  dir=$(make_world run-unfinished)
+  shipped=$(git -C "$dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/o/r/pull/7 head=%s - shipped\n' "$shipped" \
+    > "$dir/state/task-v.status"
+  result=$(FAKE_GH_OUT="OPEN	$shipped	fm/task-v	SUCCESS" \
+    FAKE_NM_STATUS="branch: fm/task-v
+head: $shipped
+status: running" verify "$dir")
+  [ "${result%%$'\t'*}" != 0 ] \
+    || fail "a claim whose validation run is still running was verified: $result"
+  case "${result#*$'\t'}" in unverified:*) ;; *) fail "an unfinished run was not unverified: $result" ;; esac
+  pass "a claim whose validation run is still running is never verified"
+}
+
+test_a_failed_run_contradicts_and_a_cancelled_one_does_not() {
+  local dir shipped result
+  dir=$(make_world run-failed)
+  shipped=$(git -C "$dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/o/r/pull/7 head=%s - shipped\n' "$shipped" \
+    > "$dir/state/task-v.status"
+
+  # A run that RAN and rejected the work is positive evidence of falsity.
+  result=$(FAKE_GH_OUT="OPEN	$shipped	fm/task-v	SUCCESS" \
+    FAKE_NM_STATUS="branch: fm/task-v
+head: $shipped
+status: failed
+outcome: failed" verify "$dir")
+  [ "${result%%$'\t'*}" = 4 ] || fail "a failed validation run did not contradict the claim: $result"
+
+  # A cancelled run established nothing either way, so it is absence.
+  result=$(FAKE_GH_OUT="OPEN	$shipped	fm/task-v	SUCCESS" \
+    FAKE_NM_STATUS="branch: fm/task-v
+head: $shipped
+status: cancelled
+outcome: cancelled" verify "$dir")
+  [ "${result%%$'\t'*}" = 3 ] || fail "a cancelled validation run was not unverified: $result"
+
+  # The positive control, so neither assertion above passes vacuously.
+  result=$(FAKE_GH_OUT="OPEN	$shipped	fm/task-v	SUCCESS" \
+    FAKE_NM_STATUS="$(nm_status fm/task-v "$shipped")" verify "$dir")
+  [ "${result%%$'\t'*}" = 0 ] || fail "an accepted validation run stopped verifying: $result"
+  pass "a failed run contradicts, a cancelled one is unverified, an accepted one verifies"
+}
+
 # --- (h) scout claims ---------------------------------------------------------
 
 test_scout_claim_checks_the_report_exists() {
@@ -699,11 +786,14 @@ test_a_transient_unverified_does_not_downgrade_an_established_record() {
 }
 
 test_a_contradiction_still_overwrites_an_established_record() {
-  local out dir result other
-  other=00112233445566778899aabbccddeeff00112233
-  # The forge answers, and it answers with a different head: the claim is now
-  # established false, so the protection above must not freeze the record.
-  out=$(establish_then_rerun contradiction-overwrites "OPEN	$other	fm/task-v	SUCCESS") \
+  local out dir result
+  # The forge answers, and it answers that the PR was CLOSED without merging:
+  # positive evidence of falsity, so the anti-downgrade protection must not
+  # freeze the record. A merely MOVED head is deliberately not used here - under
+  # a standing verdict that is staleness, not falsity, and its own case covers
+  # it - so this asserts the overwrite on evidence rather than on the world
+  # having moved.
+  out=$(establish_then_rerun contradiction-overwrites "CLOSED	$(git -C "$TMP_ROOT/contradiction-overwrites/wt" rev-parse HEAD 2>/dev/null || printf x)	fm/task-v	SUCCESS") \
     || fail "the contradiction-overwrite fixture failed"
   dir=${out%%$'\t'*}
   result=${out#*$'\t'}
@@ -1865,6 +1955,9 @@ test_legacy_claim_degrades_and_is_never_upgraded
 test_honest_claim_verifies_and_records_the_checks_state
 test_red_checks_do_not_by_themselves_contradict_a_claim
 test_checks_state_is_read_from_a_real_rollup
+test_an_unfinished_run_never_verifies
+test_a_moved_pr_head_makes_a_standing_verdict_stale
+test_a_failed_run_contradicts_and_a_cancelled_one_does_not
 test_scout_claim_checks_the_report_exists
 test_a_symlinked_scout_report_is_unverified_not_contradicted
 test_a_verdict_does_not_cover_a_later_claim

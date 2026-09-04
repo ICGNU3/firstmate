@@ -2644,32 +2644,45 @@ fi
 # ESTABLISHED before it may be cleaned up: bin/fm-verify-done.sh reads the forge,
 # git, and the validation run, and this gate refuses anything it could not
 # establish (`unverified`) as well as anything it established as false
-# (`contradicted`). The cheap local reads come first: a task that never claimed
-# done has nothing to verify, and a claim a durable verdict record already
-# establishes needs nothing re-established, so neither pays for a subprocess. The
-# landed-work gates above are unchanged and still apply.
+# (`contradicted`). A task that never claimed done has nothing to verify and
+# pays for no subprocess. A claim a durable record already establishes still
+# gets checked, because the world moves under a standing verdict - an open PR
+# can be force-pushed or gain a commit after its claim was verified - and that
+# record only rescues the ABSENCE case. The landed-work gates above are
+# unchanged and still apply.
 TEARDOWN_CLAIM=
 if [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ]; then
   TEARDOWN_CLAIM=$(fm_done_claim_last "$STATE/$ID.status")
 fi
+# Does a durable record already establish THIS EXACT claim? fm_done_claim_status
+# matches on the claim's hash, so a newer `done:` line never inherits an older
+# verdict. This does NOT skip the check below: a verdict is a true statement
+# about the world when it was made, and the world moves - an open PR can be
+# force-pushed or gain another commit after its claim was verified, leaving the
+# record right about a head the PR no longer carries. That is the same STALE
+# case this change records on a merge, and trusting the record blind here would
+# delete the local evidence while the PR ships an unclaimed commit.
+# What the record does rescue is ABSENCE: `unverified` means the sources went
+# away, and they go away for ordinary reasons long after a claim was established
+# - the forge unreachable, `gh` or `no-mistakes` off PATH, the run aged out of
+# `axi status`. So a standing verdict answers `unverified` and never answers
+# `contradicted`, which is the three-state rule applied at the only gate that
+# blocks.
+TEARDOWN_CLAIM_ESTABLISHED=0
 if [ -n "$TEARDOWN_CLAIM" ] && fm_done_claim_status "$STATE" "$ID" \
   && [ "$FM_DONE_CLAIM_STATE" = verified ]; then
-  # A durable record already establishes THIS EXACT claim (fm_done_claim_status
-  # matches on the claim's hash, so a newer `done:` line does not inherit it).
-  # Re-running the verifier could only weaken that: `unverified` is the absence
-  # of evidence, and the sources it reads go away for ordinary reasons long
-  # after a claim was established - the forge unreachable, `gh` or `no-mistakes`
-  # off PATH, the validation run aged out of `axi status`. Deferring to the
-  # record here is what makes fm_done_verdict_write's anti-downgrade rule mean
-  # something at the only gate that blocks, and it leaves `--force` (explicit
-  # discard authority) for work that was never established, not for work that
-  # was. Every refusal below still stands whenever no such record does.
-  TEARDOWN_CLAIM=
+  TEARDOWN_CLAIM_ESTABLISHED=1
 fi
 if [ -n "$TEARDOWN_CLAIM" ]; then
   TEARDOWN_CLAIM_RC=0
   TEARDOWN_CLAIM_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
     "$SCRIPT_DIR/fm-verify-done.sh" "$ID" 2>&1) || TEARDOWN_CLAIM_RC=$?
+  # A standing verdict rescues only the ABSENCE result. It never rescues
+  # evidence of falsity (4), and it never rescues staleness (5) - staleness is
+  # the case where that very record is the thing that went out of date.
+  if [ "$TEARDOWN_CLAIM_RC" -eq 3 ] && [ "$TEARDOWN_CLAIM_ESTABLISHED" -eq 1 ]; then
+    TEARDOWN_CLAIM_RC=0
+  fi
   case "$TEARDOWN_CLAIM_RC" in
     0|2) ;;
     3)
@@ -2677,6 +2690,13 @@ if [ -n "$TEARDOWN_CLAIM" ]; then
       printf '%s\n' "$TEARDOWN_CLAIM_OUT" >&2
       echo "Re-run bin/fm-verify-done.sh $ID once the forge and the validation run can be read." >&2
       echo "A claim that names no commit identity can never be established: append a conforming claim naming the commit that shipped, then verify it." >&2
+      exit 1
+      ;;
+    5)
+      echo "REFUSED: task $ID has a verified claim, but the PR has moved since it was established." >&2
+      printf '%s\n' "$TEARDOWN_CLAIM_OUT" >&2
+      echo "The verdict is about a head the PR no longer carries, so cleanup would delete the local copy while the PR ships a commit nothing claimed and nothing validated." >&2
+      echo "Re-verify against the current head with bin/fm-verify-done.sh $ID, or have the worker claim the commit that actually shipped." >&2
       exit 1
       ;;
     4)

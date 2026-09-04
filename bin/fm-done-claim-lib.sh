@@ -75,8 +75,10 @@ FM_DONE_VERDICT=
 FM_DONE_VERDICT_CLAIM_HASH=
 FM_DONE_VERDICT_EPOCH=
 FM_DONE_VERDICT_REASON=
+FM_DONE_VERDICT_EVALUATED_HEAD=
 
-FM_DONE_VERDICT_VERSION=fm-done-verdict-v1
+FM_DONE_VERDICT_VERSION=fm-done-verdict-v2
+FM_DONE_VERDICT_VERSION_V1=fm-done-verdict-v1
 
 # status_line_verb / status_line_note are the one owner of leading-verb and
 # note extraction, so this file borrows them rather than re-deriving the shape.
@@ -364,8 +366,12 @@ _fm_done_verdict_standing() {  # <state> <task-id> <claim-hash>
 # bin/fm-verify-done.sh), so nothing hides an outage from its caller. A refusal
 # returns 0, because the record already holds the stronger verdict for this
 # claim and there is nothing left to record.
-fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason>
-  local state=$1 id=$2 verdict=$3 hash=$4 reason=$5 path tmp standing
+# <evaluated-head> binds the verdict to the exact PR head SHA it looked at, so a
+# later commit on that PR can be detected as having moved the world out from
+# under a verdict that was true when it was made. The binding lives in the
+# record rather than in a caller's memory precisely so it cannot be forgotten.
+fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason> [<evaluated-head>]
+  local state=$1 id=$2 verdict=$3 hash=$4 reason=$5 evaluated=${6:-} path tmp standing
   case "$verdict" in verified|unverified|contradicted|stale) ;; *) return 2 ;; esac
   case "$hash" in *[!0-9a-f]*|'') return 2 ;; esac
   [ "${#hash}" -eq 64 ] || return 2
@@ -389,6 +395,7 @@ fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason>
     printf '%s\n' "$hash"
     printf '%s\n' "$(date +%s)"
     printf '%s\n' "$(fm_done_reason_clean "$reason")"
+    printf '%s\n' "$evaluated"
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
   chmod 0600 "$tmp" 2>/dev/null || true
   mv -f -- "$tmp" "$path" || { rm -f -- "$tmp"; return 1; }
@@ -397,11 +404,12 @@ fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason>
 # Read a verdict record. Returns 1 when it is absent, unreadable, or malformed;
 # a malformed record is never partially trusted.
 fm_done_verdict_read() {  # <state> <task-id>
-  local path version verdict hash epoch reason _extra
+  local path version verdict hash epoch reason evaluated _extra
   FM_DONE_VERDICT=
   FM_DONE_VERDICT_CLAIM_HASH=
   FM_DONE_VERDICT_EPOCH=
   FM_DONE_VERDICT_REASON=
+  FM_DONE_VERDICT_EVALUATED_HEAD=
   path=$(fm_done_verdict_path "$1" "$2")
   [ -f "$path" ] && [ -r "$path" ] && [ ! -L "$path" ] || return 1
   exec 7< "$path" || return 1
@@ -410,12 +418,22 @@ fm_done_verdict_read() {  # <state> <task-id>
   IFS= read -r hash <&7 || { exec 7<&-; return 1; }
   IFS= read -r epoch <&7 || { exec 7<&-; return 1; }
   IFS= read -r reason <&7 || reason=
+  evaluated=
+  # A v1 record predates the head binding and carries no sixth line. It is read
+  # rather than refused, and its empty binding is what makes the staleness test
+  # unable to establish anything for it - absence, not falsity.
+  if [ "$version" = "$FM_DONE_VERDICT_VERSION" ]; then
+    IFS= read -r evaluated <&7 || evaluated=
+  fi
   if IFS= read -r _extra <&7; then
     exec 7<&-
     return 1
   fi
   exec 7<&-
-  [ "$version" = "$FM_DONE_VERDICT_VERSION" ] || return 1
+  case "$version" in
+    "$FM_DONE_VERDICT_VERSION"|"$FM_DONE_VERDICT_VERSION_V1") ;;
+    *) return 1 ;;
+  esac
   case "$verdict" in verified|unverified|contradicted|stale) ;; *) return 1 ;; esac
   case "$hash" in *[!0-9a-f]*|'') return 1 ;; esac
   [ "${#hash}" -eq 64 ] || return 1
@@ -425,6 +443,8 @@ fm_done_verdict_read() {  # <state> <task-id>
   # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
   FM_DONE_VERDICT_EPOCH=$epoch
   FM_DONE_VERDICT_REASON=$reason
+  # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
+  FM_DONE_VERDICT_EVALUATED_HEAD=$evaluated
 }
 
 # THE predicate every consumer asks: for this task's current terminal claim,

@@ -85,23 +85,30 @@
 #                 unreachable, no validation run recorded, legacy claim with no
 #                 commit identity). Never a pass: not knowing is not proof.
 #   contradicted  exit 4 - a required fact WAS established and the claim is false.
+#   stale         exit 5 - the claim was established and the world has since
+#                 MOVED under it. Not established, and never a pass.
 # exit 2 - the task has no terminal claim to verify, or the request is invalid.
 #
-# The line between the last two is enforced by fm_done_verdict_resolve (in
-# bin/fm-done-claim-lib.sh), which every arm here records through, rather than
-# left to each arm's care: a `contradicted` verdict must carry the observation it
-# contradicts with, and one that carries none is recorded as `unverified`.
+# The line between unverified and contradicted is enforced by
+# fm_done_verdict_resolve (in bin/fm-done-claim-lib.sh), which every arm here
+# records through, rather than left to each arm's care: a `contradicted` verdict
+# must carry the observation it contradicts with, and one that carries none is
+# recorded as `unverified`.
 #
-# There is a fourth verdict this script never reaches for and must still expect
-# to find in the record it is re-judging: `stale`. Terminal evidence about a
-# claim has THREE shapes, not two - absence of evidence (`unverified`), positive
-# evidence of falsity (`contradicted`), and the world having CHANGED under a
-# verdict that was true when it was made (`stale`). Only the site that observes
-# a PR reach a terminal state can see the third, so bin/fm-merge-outcome-lib.sh
-# writes it when a merge lands under an established claim. What that record asks
-# for is exactly this script: `stale` is not established, so every gate re-runs
-# the verifier against the world that now exists. See bin/fm-done-claim-lib.sh
-# for the three shapes and the write precedence that keeps them apart.
+# Terminal evidence about a claim has THREE shapes, not two - absence of
+# evidence (`unverified`), positive evidence of falsity (`contradicted`), and
+# the world having CHANGED under a verdict that was true when it was made
+# (`stale`). Two sites observe the third. bin/fm-merge-outcome-lib.sh writes it
+# when a merge lands under an established claim, and this script writes it when
+# an OPEN PR's head has moved off the head a standing verdict evaluated: a
+# force-push or a later commit leaves the record right about a commit the PR no
+# longer carries. Which of the two a head mismatch is turns entirely on whether
+# a verdict already stands for this claim at the head the claim names - with
+# none, the claim simply names a commit the PR never carried, and that is
+# falsity. `stale` is not established either way, so every gate re-runs this
+# script against the world that now exists rather than trusting the record. See
+# bin/fm-done-claim-lib.sh for the three shapes and the write precedence that
+# keeps them apart.
 #
 # The verdict record binds to the exact claim line it judged, so appending a new
 # `done:` line invalidates it rather than inheriting its verdict. A task whose
@@ -172,16 +179,21 @@ verdict_is() {  # <verdict> <reason> [<observed>]
 # Record the outcome and exit. The record is written before the exit code is
 # chosen so a caller that only reads the record and a caller that only reads
 # the status agree.
+# The PR head this run actually evaluated, recorded into the verdict so a later
+# commit on that PR can be seen to have moved the world out from under it. Empty
+# for arms that evaluate no PR.
+EVALUATED_HEAD=
 finish() {
   local hash rc=0
   case "$VERDICT" in
     verified) rc=0 ;;
     unverified) rc=3 ;;
     contradicted) rc=4 ;;
+    stale) rc=5 ;;
     *) rc=2 ;;
   esac
   if hash=$(fm_done_claim_hash "$FM_DONE_CLAIM_LINE"); then
-    fm_done_verdict_write "$STATE" "$ID" "$VERDICT" "$hash" "$REASON" \
+    fm_done_verdict_write "$STATE" "$ID" "$VERDICT" "$hash" "$REASON" "$EVALUATED_HEAD" \
       || echo "fm-verify-done: could not record the verdict for $ID" >&2
   else
     echo "fm-verify-done: could not compute a claim identity for $ID" >&2
@@ -575,7 +587,21 @@ if [ -z "$PR_HEAD" ]; then
   verdict_is unverified "the forge reported no head commit for $PR_URL"
   finish
 fi
+EVALUATED_HEAD=$PR_HEAD
 if [ "$PR_HEAD" != "$HEAD_CLAIM" ]; then
+  # Two different worlds produce this mismatch and they are not the same fact.
+  # If a verdict already stands for THIS claim and it was evaluated at the head
+  # the claim names, then the claim was true and the PR has since moved under
+  # it: the world changed, which is `stale`. With no such standing verdict, the
+  # claim simply names a commit this PR does not carry, which is falsity. The
+  # test is against the LIVE head read above, never against a cached fact.
+  if fm_done_verdict_read "$STATE" "$ID" \
+    && [ "$FM_DONE_VERDICT" = verified ] \
+    && [ -n "$FM_DONE_VERDICT_EVALUATED_HEAD" ] \
+    && [ "$FM_DONE_VERDICT_EVALUATED_HEAD" = "$HEAD_CLAIM" ]; then
+    verdict_is stale "$PR_URL has moved to $PR_HEAD since this claim was established at $HEAD_CLAIM, so the verdict is about a world that no longer exists" "$PR_HEAD"
+    finish
+  fi
   verdict_is contradicted "$PR_URL is at $PR_HEAD, not the claimed $HEAD_CLAIM" "$PR_HEAD"
   finish
 fi
@@ -638,5 +664,36 @@ if [ "${HEAD_CLAIM#"$RUN_HEAD"}" = "$HEAD_CLAIM" ]; then
 fi
 RUN_OUTCOME=$(fm_nm_strip_quotes "$(fm_nm_field "$RUN_OUT" outcome)")
 RUN_STATUS=$(fm_nm_strip_quotes "$(fm_nm_field "$RUN_OUT" status)")
+# The run's result GATES the verdict; it does not decorate it. Matching heads
+# only says validation looked at this commit, never that it accepted it, so a
+# run still in flight or one that ended without accepting cannot produce
+# `verified`. fm_nm_run_is_active in bin/fm-nm-run-lib.sh owns "is this run
+# still going", so that question is asked of it rather than re-derived here.
+if fm_nm_run_is_active "$RUN_OUT"; then
+  verdict_is unverified "validation is still running against $RUN_HEAD (${RUN_STATUS:-in flight}), so nothing has accepted this work yet"
+  finish
+fi
+# Terminal AND successful AND ACCEPTED, all three, gating the verdict rather
+# than explaining it. A bare `completed` status with no accepted outcome says
+# the run stopped, never that it accepted the work, so it does not qualify.
+# Below that bar the split is the one every source in this script uses: a run
+# that RAN and rejected the work is positive evidence the claim is false, while
+# a cancelled run, or one reporting nothing this script recognises, established
+# nothing either way.
+case "$RUN_OUTCOME" in
+  passed|checks-passed) ;;
+  failed)
+    verdict_is contradicted "validation ran against $RUN_HEAD and failed, so this work was never accepted" "$RUN_OUTCOME"
+    finish
+    ;;
+  cancelled)
+    verdict_is unverified "validation against $RUN_HEAD was cancelled, so it neither accepted nor rejected this work"
+    finish
+    ;;
+  *)
+    verdict_is unverified "validation against $RUN_HEAD ended as '${RUN_OUTCOME:-${RUN_STATUS:-unknown}}', which does not establish that it accepted this work"
+    finish
+    ;;
+esac
 verdict_is verified "$PR_URL is $PR_STATE at the claimed $HEAD_CLAIM, validated at $RUN_HEAD (run ${RUN_OUTCOME:-$RUN_STATUS}); checks: $CHECKS"
 finish
