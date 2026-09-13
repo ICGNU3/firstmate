@@ -1842,6 +1842,41 @@ test_a_failed_verdict_write_still_publishes_the_outcome() {
 
 # The precedence itself, driven through the record's owner. Each incoming
 # verdict is tried against a standing one and the record is read back.
+# The verdict record has more than one writer: the verifier records what it
+# established, and the terminal-outcome emitter records what a closed or merged
+# PR implies. Reading the standing verdict, applying precedence, and writing must
+# be ONE critical section. Without that, a writer that read an empty record can
+# still land its weaker verdict after a stronger one arrived, losing a recorded
+# contradiction - the one verdict that must never be lost quietly, because it is
+# the only positive evidence that a claim is false. Driven concurrently because
+# the interleaving does not exist any other way.
+#
+# The asserted invariant holds whichever order the writers happen to take: a
+# contradiction that lands first makes every later `unverified` a no-op, and one
+# that lands last overwrites them. Only a torn read-then-write can end anywhere
+# else, which is exactly what serialization forbids.
+test_concurrent_verdict_writes_never_lose_a_contradiction() {
+  local dir state hash round i pids
+  dir="$TMP_ROOT/verdict-serialized"
+  state="$dir/state"
+  mkdir -p "$state"
+  hash=$(printf '%064d' 7)
+  for round in 1 2 3 4 5 6 7 8; do
+    rm -f "$state/task-v.done-verdict"
+    pids=()
+    for i in 1 2 3 4; do
+      fm_done_verdict_write "$state" task-v unverified "$hash" "the forge could not be reached" '' &
+      pids+=("$!")
+    done
+    fm_done_verdict_write "$state" task-v contradicted "$hash" "the PR was closed without merging" '' &
+    pids+=("$!")
+    for i in "${pids[@]}"; do wait "$i" || true; done
+    fm_done_verdict_read "$state" task-v       || fail "round $round left no readable verdict record after concurrent writes"
+    [ "$FM_DONE_VERDICT" = contradicted ]       || fail "round $round lost the contradiction to a concurrent weaker write: $FM_DONE_VERDICT"
+  done
+  pass "concurrent verdict writers never lose a recorded contradiction"
+}
+
 test_verdict_write_precedence_keeps_the_stronger_statement() {
   local dir state claim hash
   claim="done: pr=$PR_A head=$HEAD_A - shipped"
@@ -2153,6 +2188,7 @@ test_a_close_narrates_only_what_it_contradicts
 test_a_terminal_outcome_invents_no_verdict_without_a_claim
 test_authority_rides_a_merge_and_is_refused_on_a_close
 test_a_failed_verdict_write_still_publishes_the_outcome
+test_concurrent_verdict_writes_never_lose_a_contradiction
 test_verdict_write_precedence_keeps_the_stronger_statement
 test_a_held_back_span_with_multibyte_prose_presents_no_fragment
 test_the_unrecognised_cap_is_per_task_not_per_drain

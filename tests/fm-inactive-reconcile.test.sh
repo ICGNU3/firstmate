@@ -422,7 +422,7 @@ test_canonical_done_claim_carries_pr_to_parent_and_dedupes_by_pr() {
   awk '$0 !~ /^pr=/' "$MATE/state/child.meta" > "$MATE/state/child.meta.tmp"
   mv "$MATE/state/child.meta.tmp" "$MATE/state/child.meta"
   FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
-  key=$(reported_outcome_key "$MATE" child done) || fail "canonical claim receipt key missing"
+  key=$(reported_outcome_key "$MATE" child 'done') || fail "canonical claim receipt key missing"
   grep -Fq "child child done: pr=https://example.test/owner/repo/pull/2" "$MAIN/state/mate.status" \
     || fail "canonical terminal claim did not carry its PR to the parent: $(cat "$MAIN/state/mate.status")"
   [ "$(grep -c "child-outcome-child-done-" "$MAIN/state/mate.status")" = 1 ] \

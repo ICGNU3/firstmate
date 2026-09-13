@@ -664,7 +664,8 @@ test_registration_arms_claim_verification_without_blocking() {
 
   dir=$(make_case verify-armed)
   fm_write_meta "$dir/home/state/task-a.meta" \
-    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR"
+    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR" \
+    'authorized_repo=github.com/o/r'
   printf 'done: pr=%s head=%s - shipped\n' "$url" "$head" > "$dir/home/state/task-a.status"
   FM_TEST_GH_HEAD=$head run_check_entry "$dir" task-a "$url" > "$dir/stdout" 2> "$dir/stderr" \
     || fail "registration failed for a task with a conforming claim: $(cat "$dir/stderr")"
@@ -680,7 +681,8 @@ test_registration_arms_claim_verification_without_blocking() {
   # the printed line carry the contradiction.
   dir=$(make_case verify-contradicted)
   fm_write_meta "$dir/home/state/task-a.meta" \
-    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR"
+    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR" \
+    'authorized_repo=github.com/o/r'
   printf 'done: pr=%s head=%s - shipped\n' "$url" "$other" > "$dir/home/state/task-a.status"
   FM_TEST_GH_HEAD=$head run_check_entry "$dir" task-a "$url" > "$dir/stdout" 2> "$dir/stderr" \
     || fail "a contradicted claim changed the registration's exit status: $(cat "$dir/stderr")"
@@ -706,7 +708,8 @@ test_registration_arms_claim_verification_without_blocking() {
   # the registration it cannot affect is already complete.
   dir=$(make_case verify-slow)
   fm_write_meta "$dir/home/state/task-a.meta" \
-    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR"
+    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR" \
+    'authorized_repo=github.com/o/r'
   printf 'done: pr=%s head=%s - shipped\n' "$url" "$head" > "$dir/home/state/task-a.status"
   started=$(date +%s)
   FM_TEST_GH_HEAD=$head FM_TEST_GH_SLEEP=20 FM_PR_CHECK_VERIFY_TIMEOUT=2 \
