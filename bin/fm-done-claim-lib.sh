@@ -397,7 +397,7 @@ _fm_done_verdict_standing() {  # <state> <task-id> <claim-hash>
 # under a verdict that was true when it was made. The binding lives in the
 # record rather than in a caller's memory precisely so it cannot be forgotten.
 fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason> [<evaluated-head>] [<snapshot-token>]
-  local state=$1 id=$2 verdict=$3 hash=$4 reason=$5 evaluated=${6:-} expected=${7:-} lock
+  local state=$1 id=$2 verdict=$3 hash=$4 reason=$5 evaluated=${6:-} expected=${7:-}
   case "$verdict" in verified|unverified|contradicted|stale) ;; *) return 2 ;; esac
   case "$hash" in *[!0-9a-f]*|'') return 2 ;; esac
   [ "${#hash}" -eq 64 ] || return 2
@@ -407,6 +407,9 @@ fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason> [
     export FM_STATE_OVERRIDE
     # shellcheck source=bin/fm-wake-lib.sh
     . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-wake-lib.sh"
+    # Not `local`: an explicit `exit` below unwinds function scope before the
+    # EXIT trap runs, and a trap that cannot read the lock path leaves the lock
+    # behind. Assigned only inside this subshell, so it reaches no caller.
     lock="$state/.done-verdict-$id.lock"
     fm_lock_acquire_wait "$lock" || exit 1
     trap 'fm_lock_release "$lock"' EXIT

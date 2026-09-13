@@ -1929,6 +1929,62 @@ test_concurrent_verdict_writes_never_lose_a_contradiction() {
   pass "concurrent verdict writers never lose a recorded contradiction"
 }
 
+# A refused write must leave the record's lock exactly as it found it. The
+# refusal paths exit the critical section explicitly rather than falling out of
+# it, and an explicit exit unwinds function scope before the EXIT trap runs - so
+# a trap that reads a function-local lock path releases nothing and strands the
+# lock. A stranded lock on the one record every later gate consults is a slow
+# way to wedge the fleet, which is why the refusal paths are exercised here and
+# not only the accepting one.
+test_a_refused_verdict_write_strands_no_lock() {
+  local dir state hash token rc lock
+  dir="$TMP_ROOT/verdict-refusal-lock"
+  state="$dir/state"
+  lock="$state/.done-verdict-task-v.lock"
+  mkdir -p "$state"
+  hash=$(printf '%064d' 5)
+
+  # Driven as a top-level caller, which is what a script sourcing this library
+  # is, because that is the shape the stranding appears in: an explicit `exit`
+  # out of the critical section unwinds scope before the EXIT trap runs, and a
+  # trap that cannot read the lock path releases nothing. Called from inside a
+  # function the unwind order differs and the fault hides, so asserting it from
+  # this harness alone would prove nothing.
+  refuse_at_top_level() {  # <verdict-args...>
+    bash -c '
+      set -u
+      . "$1"
+      shift
+      fm_done_verdict_write "$@"
+    ' _ "$ROOT/bin/fm-done-claim-lib.sh" "$@" 2>/dev/null
+  }
+
+  refuse_at_top_level "$state" task-v contradicted "$hash" "the PR closed without merging" '' \
+    || fail "the contradiction fixture could not be recorded"
+
+  # An unpinned `verified` may not erase a contradiction.
+  rc=0
+  refuse_at_top_level "$state" task-v verified "$hash" "a delayed look" '' || rc=$?
+  [ "$rc" -ne 0 ] || fail "an unpinned verified overwrote a contradiction"
+  assert_absent "$lock" "a refused unpinned write stranded the verdict lock"
+
+  # A pinned write whose snapshot is no longer current is refused too, and that
+  # refusal leaves the critical section by the path that strands the lock.
+  token=$(fm_done_verdict_snapshot_token "$state" task-v) \
+    || fail "the record's snapshot token could not be read"
+  refuse_at_top_level "$state" task-v verified "$hash" "a fresh look" '' "$token" \
+    || fail "a pinned write against the current snapshot was refused"
+  rc=0
+  refuse_at_top_level "$state" task-v verified "$hash" "a delayed look" '' "$token" || rc=$?
+  [ "$rc" -ne 0 ] || fail "a write pinned to a superseded snapshot was accepted"
+  assert_absent "$lock" "a refused pinned write stranded the verdict lock"
+
+  # The record stays writable, which is what a stranded lock takes away.
+  refuse_at_top_level "$state" task-v contradicted "$hash" "closed again" '' \
+    || fail "the record was not writable after a refused write"
+  pass "a refused verdict write strands no lock and leaves the record writable"
+}
+
 test_verdict_write_precedence_keeps_the_stronger_statement() {
   local dir state claim hash delayed_token
   claim="done: pr=$PR_A head=$HEAD_A - shipped"
@@ -2253,6 +2309,7 @@ test_a_terminal_outcome_invents_no_verdict_without_a_claim
 test_authority_rides_a_merge_and_is_refused_on_a_close
 test_a_failed_verdict_write_still_publishes_the_outcome
 test_concurrent_verdict_writes_never_lose_a_contradiction
+test_a_refused_verdict_write_strands_no_lock
 test_verdict_write_precedence_keeps_the_stronger_statement
 test_a_held_back_span_with_multibyte_prose_presents_no_fragment
 test_the_unrecognised_cap_is_per_task_not_per_drain
