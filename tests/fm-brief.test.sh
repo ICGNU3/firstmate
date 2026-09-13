@@ -428,6 +428,12 @@ test_no_mistakes_dod_grants_pipeline_authority_at_the_done_instruction() {
     "no-mistakes DOD must accept pipeline-owned fix commits at the terminal head"
   assert_no_grep "head is not the work you committed" "$brief" \
     "no-mistakes DOD still requires personal authorship of the terminal head"
+  assert_no_grep "say what actually happened instead" "$brief" \
+    "no-mistakes DOD still leaves forge verification failures without a machine-readable status"
+  assert_grep 'append `blocked: {what the forge actually shows}` when firstmate action is needed to get the work to the forge' "$brief" \
+    "no-mistakes DOD must expose a blocked forge-verification status"
+  assert_grep 'append `failed: {what the forge actually shows}` when delivery genuinely failed, then stop.' "$brief" \
+    "no-mistakes DOD must expose a failed forge-verification status"
   auth_line=$(grep -n -F -- "Read both from the forge, never from your local branch" "$brief" | head -1 | cut -d: -f1)
   [ -n "$done_line" ] && [ -n "$auth_line" ] && [ "$((auth_line - done_line))" -le 4 ] \
     || fail "no-mistakes DOD separated the forge readback from the terminal done gate"
