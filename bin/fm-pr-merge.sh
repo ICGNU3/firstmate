@@ -1208,7 +1208,7 @@ esac
 # refused or failed merge above, and a queued forge merge exits without an
 # outcome while its existing poll remains armed.
 outcome_rc=0
-fm_merge_outcome_report "$FM_HOME" "$STATE" "$ID" "$URL" self \
+fm_merge_outcome_report "$FM_HOME" "$STATE" "$ID" "$URL" self merged \
   "${FM_PR_MERGE_AUTHORITY:-}" || outcome_rc=$?
 case "$outcome_rc" in
   0) ;;

@@ -43,6 +43,23 @@
 #   (q4) no-mistakes + squash-merged rebased local plus extra commit -> REFUSE
 #   (q5) gh down + squash-merged stale local, content not in default -> REFUSE
 #
+# Also covers the terminal-claim gate: cleanup is the point of no return for a
+# `done:` claim, so a claim the verifier could not establish, or established as
+# false, must refuse alongside the landed-work gates above.
+#   (z1) no terminal claim at all                       -> ALLOW  (nothing asserted)
+#   (z2) legacy claim with no commit identity           -> REFUSE (unverified)
+#   (z3) claim naming a commit that is not the branch   -> REFUSE (contradicted)
+#   (z4) claim naming the branch tip                    -> ALLOW  (verified)
+#   (z5) contradicted claim + --force                   -> ALLOW  (escape hatch)
+#   (z6) established claim, verifier's sources then gone -> ALLOW  (the record stands)
+#   (z7) same blinded world with NO record standing     -> REFUSE (unverified)
+#   (z8) a `stale` record, verifier blinded             -> REFUSE (not established)
+#   (z9) verified record, then the PR closed unmerged   -> REFUSE (contradicted)
+#   (z10) false claim, then a `failed:` line withdrawing it -> ALLOW (no claim)
+#   (z11) false claim + `blocked:`/`needs-decision:`       -> REFUSE (still claimed)
+#   (z12) verified record, then the PR gained a commit     -> REFUSE (stale)
+#   (z13) the same fixture with the PR standing still      -> ALLOW  (control)
+#
 # Also covers backlog teardown-lock-race: a git index.lock left in the worktree by a
 # killed crew process (bin/fm-teardown.sh's teardown_treehouse_return).
 #   (r) provably-stale index.lock (old mtime, no live holder) -> lock removed, ALLOW
@@ -1890,14 +1907,14 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses() {
   wt_commit "$case_dir" "merged work"
   wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
   git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
-  printf 'working: shipping\ndone: PR https://github.com/example/repo/pull/9 checks green\n' \
+  printf 'working: shipping\ndone: branch=fm/task-x1 head=%s - merged work\n' "$wt_head" \
     > "$case_dir/state/task-x1.status"
   set +e
   FM_HOME="$case_dir/home" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
   expect_code 0 "$rc" "mate-teardown-delivers: teardown should succeed: $(cat "$case_dir/stderr")"
-  grep -Eq '^done \[key=child-outcome-task-x1-done-[0-9a-f]{8}\]: child task-x1 done: PR https://github.com/example/repo/pull/9 checks green pr=https://github.com/example/repo/pull/9 mode=local-only$' "$channel" \
+  grep -Eq "^done \[key=child-outcome-task-x1-done-[0-9a-f]{8}\]: child task-x1 done: branch=fm/task-x1 head=$wt_head - merged work mode=local-only\$" "$channel" \
     || fail "mate-teardown-delivers: the final ledger line did not reach the parent: $(cat "$channel" 2>/dev/null)"
   [ ! -e "$case_dir/state/task-x1.meta" ] || fail "mate-teardown-delivers: teardown left the task record"
 
@@ -1914,7 +1931,7 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses() {
   wt_commit "$case_dir" "merged work"
   wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
   git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
-  printf 'done: PR https://github.com/example/repo/pull/9 checks green\n' > "$case_dir/state/task-x1.status"
+  printf 'done: branch=fm/task-x1 head=%s - merged work\n' "$wt_head" > "$case_dir/state/task-x1.status"
   set +e
   FM_HOME="$case_dir/home" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
@@ -1940,7 +1957,7 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses() {
   rc=$?
   set -e
   expect_code 0 "$rc" "mate-teardown-refuses: rerun after repair should succeed: $(cat "$case_dir/stderr2")"
-  grep -Eq '^done \[key=child-outcome-task-x1-done-[0-9a-f]{8}\]: child task-x1 done: PR https://github.com/example/repo/pull/9 checks green' "$channel" \
+  grep -Eq "^done \[key=child-outcome-task-x1-done-[0-9a-f]{8}\]: child task-x1 done: branch=fm/task-x1 head=$wt_head - merged work" "$channel" \
     || fail "mate-teardown-refuses: the rerun did not deliver the final line"
   [ ! -e "$case_dir/state/task-x1.meta" ] || fail "mate-teardown-refuses: rerun left the task record"
   pass "a secondmate home's teardown delivers the child's final line or refuses until it can"
@@ -3666,6 +3683,454 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
+# --- terminal-claim gate ----------------------------------------------------
+# A claim is the worker's assertion; cleanup destroys the evidence that could
+# ever check it. These pin that the gate refuses what it could not establish and
+# what it established as false, and lets an established claim through.
+
+# Build a landed local-only case whose status log carries <claim>. Echoes the
+# case dir. The caller reads the branch head back with `git rev-parse` rather
+# than through a global: this runs inside a command substitution, so anything it
+# sets in its own shell dies with that subshell (tests/lib.sh documents the same
+# trap for fm_test_tmproot).
+make_claim_case() {  # <name> <claim-line-or-empty>
+  local name=$1 claim=$2 case_dir head
+  case_dir=$(make_case "$name")
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "claim work"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  git -C "$case_dir/project" update-ref refs/heads/main "$head"
+  if [ -n "$claim" ]; then
+    printf '%s\n' "$claim" > "$case_dir/state/task-x1.status"
+  else
+    : > "$case_dir/state/task-x1.status"
+  fi
+  printf '%s\n' "$case_dir"
+}
+
+# The verifier reads the forge with its own `gh pr view --json ...`. This mock
+# answers that one query from FM_FAKE_PR_VIEW, so a single fixture can be asked
+# about the same PR twice: once while it still carries the claimed commit, and
+# once after it has moved.
+add_gh_pr_view_from_env() {  # <case-dir>
+  local case_dir=$1
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr view")
+    case " $* " in
+      *headRefOid*) printf '%s\n' "${FM_FAKE_PR_VIEW:-}" ; exit 0 ;;
+    esac
+    ;;
+esac
+echo "error: pull request not found" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh"
+}
+
+# A direct-PR fixture whose work is landed on origin, so the landed-work gates
+# pass and the claim gate is the only thing left to decide the teardown. The
+# caller establishes the claim itself, because a setup failure inside a command
+# substitution could not abort the test.
+make_pr_claim_case() {  # <name>
+  local name=$1 case_dir head
+  case_dir=$(make_case "$name")
+  write_meta "$case_dir" direct-PR ship
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  add_gh_pr_view_from_env "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/o/r/pull/7 head=%s - shipped\n' "$head" \
+    > "$case_dir/state/task-x1.status"
+  printf '%s\n' "$case_dir"
+}
+
+# Establish a fixture's claim against the head the PR actually carries, exactly
+# as a real registration would, so the verdict it leaves carries a real head
+# binding rather than a seeded one.
+establish_pr_claim() {  # <case-dir> <head>
+  local case_dir=$1 head=$2 rc=0
+  set +e
+  FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" \
+    PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
+    FM_FAKE_PR_VIEW="OPEN	$head	fm/task-x1	SUCCESS" \
+    "$ROOT/bin/fm-verify-done.sh" task-x1 >/dev/null 2>&1
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "setup: the honest PR claim did not verify"
+  assert_grep "$head" "$case_dir/state/task-x1.done-verdict" \
+    "setup: the verdict did not bind the PR head it evaluated"
+}
+
+# RULE TWO at the only gate that blocks. A verdict is a true statement about the
+# world when it was made, and an open PR can gain a commit afterwards. The
+# verdict then describes a head the PR no longer carries, so cleanup must STOP:
+# passing on it would delete the local copy while the PR ships a commit nothing
+# claimed and nothing validated. Staleness blocks; it is not a warning, and it
+# is not a downgrade to absence. The local copy is deliberately left landed on
+# origin so the landed-work gates all pass and only the claim gate can refuse -
+# which is exactly the shape of the real failure, where everything local looks
+# finished and only the forge knows the PR moved.
+test_a_stale_verdict_blocks_cleanup() {
+  local case_dir head moved rc=0
+  case_dir=$(make_pr_claim_case claim-stale-blocks)
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  moved=$(git -C "$case_dir/wt" rev-parse 'HEAD~1')
+  [ "$moved" != "$head" ] || fail "setup: the fixture has no second commit to move to"
+  establish_pr_claim "$case_dir" "$head"
+
+  # The PR gains a commit the claim never named. Nothing local changed.
+  set +e
+  FM_FAKE_PR_VIEW="OPEN	$moved	fm/task-x1	SUCCESS" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] \
+    || fail "a verdict whose PR head moved under it still carried cleanup through"
+  assert_grep "has moved since it was established" "$case_dir/stderr" \
+    "the refusal did not report the moved head as staleness"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "the stale refusal erased the durable task record"
+
+  # The positive control, so the refusal above is not vacuous: the same fixture
+  # with the PR standing still tears down cleanly.
+  case_dir=$(make_pr_claim_case claim-stale-control)
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  establish_pr_claim "$case_dir" "$head"
+  set +e
+  FM_FAKE_PR_VIEW="OPEN	$head	fm/task-x1	SUCCESS" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "a PR that never moved was refused: $(cat "$case_dir/stderr")"
+  pass "a verdict whose PR head moved goes stale and blocks cleanup"
+}
+
+# A verdict is true about the world when it was made, and the world moves. A
+# standing `verified` record must rescue only the ABSENCE result, never the
+# evidence one, or cleanup deletes the local copy while the branch carries a
+# commit nobody claimed and nothing validated.
+test_a_standing_verdict_does_not_survive_the_head_moving() {
+  local case_dir head moved claim hash rc=0
+  case_dir=$(make_claim_case claim-moved "placeholder")
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  claim="done: branch=fm/task-x1 head=$head - shipped"
+  printf '%s\n' "$claim" > "$case_dir/state/task-x1.status"
+
+  # Establish it, exactly as a real registration would.
+  set +e
+  FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" FM_DATA_OVERRIDE="$case_dir/data" \
+    "$ROOT/bin/fm-verify-done.sh" task-x1 >/dev/null 2>&1
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "setup: the honest claim did not verify"
+  assert_grep verified "$case_dir/state/task-x1.done-verdict" \
+    "setup: no standing verified verdict was recorded"
+
+  # Now the world moves under it: the branch gains a commit the claim never named.
+  wt_commit "$case_dir" "a commit the claim never named"
+  moved=$(git -C "$case_dir/wt" rev-parse HEAD)
+  [ "$moved" != "$head" ] || fail "setup: the branch did not move"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] \
+    || fail "a standing verdict let cleanup proceed after the head moved under it"
+  assert_grep "contradicted" "$case_dir/stderr" \
+    "the refusal did not report the moved head as contradicting the claim"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "the refusal erased the durable task record"
+  pass "a standing verdict does not survive the head it was about moving"
+}
+
+test_no_terminal_claim_is_unaffected_by_the_gate() {
+  local case_dir rc=0
+  case_dir=$(make_claim_case claim-none "")
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "a task that never claimed done must not be gated: $(cat "$case_dir/stderr")"
+  pass "a task with no terminal claim is unaffected by the claim gate"
+}
+
+test_legacy_claim_without_commit_identity_refuses() {
+  local case_dir rc=0
+  case_dir=$(make_claim_case claim-legacy "done: ready in branch fm/task-x1")
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a legacy claim with no commit identity was torn down as done"
+  assert_grep "could not be established" "$case_dir/stderr" \
+    "the refusal did not say the claim could not be established"
+  assert_grep "names no commit identity" "$case_dir/stderr" \
+    "the refusal did not name the missing commit identity"
+  assert_no_grep "written before this contract" "$case_dir/stderr" \
+    "the refusal asserted when the claim was written, which nothing here observed"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "the claim refusal erased the durable task record"
+  pass "a legacy claim with no commit identity refuses cleanup"
+}
+
+test_claim_naming_the_wrong_commit_refuses() {
+  local case_dir rc=0 other
+  case_dir=$(make_claim_case claim-wrong "placeholder")
+  other=$(git -C "$case_dir/wt" rev-parse 'HEAD~1')
+  printf 'done: branch=fm/task-x1 head=%s - shipped\n' "$other" \
+    > "$case_dir/state/task-x1.status"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a claim naming a commit that is not the branch tip was torn down as done"
+  assert_grep "contradicted" "$case_dir/stderr" \
+    "the refusal did not report the claim as contradicted"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "the contradiction refusal erased the durable task record"
+  pass "a claim naming the wrong commit refuses cleanup"
+}
+
+test_established_claim_allows_teardown() {
+  local case_dir rc=0 head
+  case_dir=$(make_claim_case claim-good "placeholder")
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf 'done: branch=fm/task-x1 head=%s - shipped\n' "$head" \
+    > "$case_dir/state/task-x1.status"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "an established claim was refused: $(cat "$case_dir/stderr")"
+  pass "a claim naming the branch tip is established and allows cleanup"
+}
+
+# The record is what establishes a claim, not the verifier's exit code on the
+# day cleanup happens. A claim established at PR registration must still clear
+# the gate days later when the sources the verifier reads have gone away for
+# ordinary reasons - the forge unreachable, `gh` or `no-mistakes` off PATH, the
+# branch's reflog expired - because `unverified` is the absence of evidence and
+# must not un-establish work that was genuinely established. Otherwise `--force`,
+# which AGENTS.md ties to explicit discard authority, becomes the only way to
+# clean up honest work.
+run_verify_done() {  # <case-dir>
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_HOME="$1" \
+  FM_STATE_OVERRIDE="$1/state" \
+  FM_DATA_OVERRIDE="$1/data" \
+    "$ROOT/bin/fm-verify-done.sh" task-x1
+}
+
+# Take away the one thing the local-only arm needs to establish that fm/task-x1
+# introduced its claimed commit: the branch's own history. This is what an
+# expired reflog leaves behind, and it is absence of evidence, not falsity.
+blind_the_local_only_verifier() {  # <case-dir>
+  local reflog
+  reflog="$(git -C "$1/wt" rev-parse --git-common-dir)/logs/refs/heads/fm/task-x1"
+  [ -f "$reflog" ] || fail "the fixture had no branch reflog to remove"
+  rm -f "$reflog"
+}
+
+test_an_established_claim_survives_losing_the_verifier_sources() {
+  local case_dir rc=0 head
+  case_dir=$(make_claim_case claim-established "placeholder")
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf 'done: branch=fm/task-x1 head=%s - shipped\n' "$head" \
+    > "$case_dir/state/task-x1.status"
+  run_verify_done "$case_dir" > "$case_dir/verify.out" 2>&1 \
+    || fail "the honest claim was not established in the first place: $(cat "$case_dir/verify.out")"
+  [ -f "$case_dir/state/task-x1.done-verdict" ] \
+    || fail "verifying the claim wrote no durable record"
+
+  blind_the_local_only_verifier "$case_dir"
+  set +e
+  run_verify_done "$case_dir" > "$case_dir/verify2.out" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] \
+    || fail "the fixture did not actually blind the verifier (rc=$rc): $(cat "$case_dir/verify2.out")"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" \
+    "a claim a durable record already established was refused once its sources went away: $(cat "$case_dir/stderr")"
+  pass "an established claim still clears the gate after the verifier's sources go away"
+}
+
+# The other half of the same rule: deferring to the record is not deferring to
+# nothing. With no record standing, the identical blinded world still refuses.
+# A record-first gate is only safe while the record itself stays honest. These
+# two pin the other half: a verdict that has stopped describing the world must
+# not carry a task through cleanup on the strength of what it used to say.
+seed_verdict_record() {  # <case-dir> <verdict> <reason>
+  local case_dir=$1 verdict=$2 reason=$3 claim hash
+  # shellcheck source=bin/fm-done-claim-lib.sh disable=SC1091
+  . "$ROOT/bin/fm-done-claim-lib.sh"
+  claim=$(fm_done_claim_last "$case_dir/state/task-x1.status")
+  [ -n "$claim" ] || fail "the fixture wrote no terminal claim to bind a verdict to"
+  hash=$(fm_done_claim_hash "$claim") || fail "the claim could not be hashed"
+  fm_done_verdict_write "$case_dir/state" task-x1 "$verdict" "$hash" "$reason" \
+    || fail "the $verdict record could not be seeded"
+}
+
+# `stale` is not established. The record-first gate must fall through to the
+# verifier for it, which is the whole point: the expensive check is deferred to
+# the gate that actually needs the answer, and here that check cannot be made.
+# The exit from a false claim is withdrawing it, not overriding the guard. A
+# task whose PR was abandoned and which says so honestly has no claim left to
+# verify, so the claim gate has nothing to hold it to - while its landed-work
+# gates, which are separate, still apply.
+test_a_withdrawn_claim_no_longer_holds_up_cleanup() {
+  local case_dir rc=0 head
+  case_dir=$(make_claim_case claim-withdrawn "placeholder")
+  head=$(git -C "$case_dir/wt" rev-parse 'HEAD~1')
+  # A claim that is false: it names a commit that is not the branch tip.
+  printf 'done: branch=fm/task-x1 head=%s - shipped\n' "$head" \
+    > "$case_dir/state/task-x1.status"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] \
+    || fail "setup error: the false claim was not refused in the first place"
+
+  printf 'failed: the PR was abandoned, nothing landed\n' >> "$case_dir/state/task-x1.status"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout2" 2> "$case_dir/stderr2"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" \
+    "a claim the task withdrew still held up cleanup: $(cat "$case_dir/stderr2")"
+  pass "withdrawing a false claim is a way out that does not need --force"
+}
+
+# The other half, so the exit above is narrow rather than a hole: a task that is
+# merely stuck is still making its claim and stays held to it.
+test_a_blocked_task_is_still_held_to_its_standing_claim() {
+  local case_dir rc=0 head verb
+  for verb in blocked needs-decision; do
+    case_dir=$(make_claim_case "claim-standing-$verb" "placeholder")
+    head=$(git -C "$case_dir/wt" rev-parse 'HEAD~1')
+    printf 'done: branch=fm/task-x1 head=%s - shipped\n' "$head" \
+      > "$case_dir/state/task-x1.status"
+    printf '%s: waiting on the captain\n' "$verb" >> "$case_dir/state/task-x1.status"
+    set +e
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] \
+      || fail "a $verb line let a task out of a claim it is still making"
+    [ -e "$case_dir/state/task-x1.meta" ] \
+      || fail "the $verb refusal erased the durable task record"
+  done
+  pass "a task that is merely stuck stays held to the claim it still makes"
+}
+
+test_a_stale_record_does_not_carry_a_task_through_cleanup() {
+  local case_dir rc=0 head
+  case_dir=$(make_claim_case claim-stale "placeholder")
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf 'done: branch=fm/task-x1 head=%s - shipped\n' "$head" \
+    > "$case_dir/state/task-x1.status"
+  seed_verdict_record "$case_dir" stale 'the PR merged after this claim was established'
+  blind_the_local_only_verifier "$case_dir"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] \
+    || fail "a stale record carried a task through cleanup without re-verification"
+  assert_grep "could not be established" "$case_dir/stderr" \
+    "the refusal did not say the claim could not be established"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "the stale refusal erased the durable task record"
+  pass "a stale record sends the gate back to the verifier instead of passing"
+}
+
+# The three-week rot, end to end at the gate: a claim established while its PR
+# was open, then closed unmerged. The close must have corrected the record, so
+# cleanup refuses rather than passing on what the record used to say. The claim
+# NAMES the PR that closed, which is what makes the close evidence about it -
+# a close only falsifies a claim that is about the PR whose close was observed.
+test_a_closed_pr_stops_its_own_done_record_carrying_cleanup() {
+  local case_dir rc=0 head
+  case_dir=$(make_claim_case claim-closed "placeholder")
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/o/r/pull/7 branch=fm/task-x1 head=%s - shipped\n' "$head" \
+    > "$case_dir/state/task-x1.status"
+  seed_verdict_record "$case_dir" verified 'the PR is open at the claimed head'
+  # shellcheck source=bin/fm-merge-outcome-lib.sh disable=SC1091
+  . "$ROOT/bin/fm-merge-outcome-lib.sh"
+  FM_HOME="$case_dir" fm_merge_outcome_report "$case_dir" "$case_dir/state" task-x1 \
+    https://github.com/o/r/pull/7 poll closed-unmerged \
+    || fail "the close outcome could not be published"
+  blind_the_local_only_verifier "$case_dir"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] \
+    || fail "a claim whose PR was closed unmerged was torn down as done"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "the refusal erased the durable task record"
+  pass "a PR closed without merging stops its own done record carrying cleanup"
+}
+
+test_an_unestablished_claim_still_refuses_without_a_record() {
+  local case_dir rc=0 head
+  case_dir=$(make_claim_case claim-unestablished "placeholder")
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf 'done: branch=fm/task-x1 head=%s - shipped\n' "$head" \
+    > "$case_dir/state/task-x1.status"
+  blind_the_local_only_verifier "$case_dir"
+  [ ! -e "$case_dir/state/task-x1.done-verdict" ] \
+    || fail "the fixture left a verdict record behind"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] \
+    || fail "a claim nothing had ever established was torn down as done"
+  assert_grep "could not be established" "$case_dir/stderr" \
+    "the refusal did not say the claim could not be established"
+  pass "a claim with no record standing still refuses when it cannot be established"
+}
+
+test_force_overrides_a_contradicted_claim() {
+  local case_dir rc=0 other
+  case_dir=$(make_claim_case claim-force "placeholder")
+  other=$(git -C "$case_dir/wt" rev-parse 'HEAD~1')
+  printf 'done: branch=fm/task-x1 head=%s - shipped\n' "$other" \
+    > "$case_dir/state/task-x1.status"
+  set +e
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "--force did not override a contradicted claim: $(cat "$case_dir/stderr")"
+  pass "--force remains the explicit escape from a contradicted claim"
+}
+
+
+test_no_terminal_claim_is_unaffected_by_the_gate
+test_a_stale_verdict_blocks_cleanup
+test_a_standing_verdict_does_not_survive_the_head_moving
+test_legacy_claim_without_commit_identity_refuses
+test_claim_naming_the_wrong_commit_refuses
+test_established_claim_allows_teardown
+test_force_overrides_a_contradicted_claim
+test_an_established_claim_survives_losing_the_verifier_sources
+test_an_unestablished_claim_still_refuses_without_a_record
+test_a_withdrawn_claim_no_longer_holds_up_cleanup
+test_a_blocked_task_is_still_held_to_its_standing_claim
+test_a_stale_record_does_not_carry_a_task_through_cleanup
+test_a_closed_pr_stops_its_own_done_record_carrying_cleanup
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator

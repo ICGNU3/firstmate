@@ -70,12 +70,49 @@ unset _fm_classify_nounset
 # its away-mode classification. FM_CAPTAIN_RE overrides the whole set when a home
 # needs a custom verb vocabulary; absent, this default applies.
 #
-# Free-text tokens (PR ready, checks green, ready in branch, merged) exist only for
-# legacy lines that lack a standard terminal verb. status_is_captain_relevant is
-# verb-aware: a nonterminal working: or paused: line never becomes captain-relevant
-# merely because its prose contains one of those tokens (for example
-# "working: rebased onto merged #76").
-FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'
+# Two kinds of token live in this set and they are matched differently, because
+# they earn their relevance differently.
+#
+# VERB tokens are ANCHORED to the start of the line (leading whitespace allowed,
+# since a status line may be indented and fm_done_claim_last already tolerates
+# that). A verb means something only in the leading position it is documented to
+# occupy; matched anywhere, it turns worker prose into a state. That is not
+# theoretical - "- integration suite ready: green" and "rebased, done: nothing
+# left" both matched here unanchored, and because status_line_verb_is_known
+# defers to this function as the owner of the configurable vocabulary, such a
+# line counted as KNOWN, dropped out of the UNREAD STATUS surface, and woke
+# firstmate while classifying as nothing. That silent absorption is exactly what
+# the unrecognised-line surface exists to end, so no verb token is left
+# unanchored: a twin one line away is how a rule comes to be enforced in one
+# spelling and not its neighbour.
+#
+# FREE-TEXT tokens (PR ready, checks green, ready in branch, merged) stay
+# unanchored, because they exist only for legacy lines that lack a standard
+# leading verb - they describe prose and have no leading position to earn.
+#
+# status_is_captain_relevant is verb-aware on top of both: a nonterminal working:
+# or paused: line never becomes captain-relevant merely because its prose
+# contains one of those free-text tokens (for example "working: rebased onto
+# merged #76").
+FM_CLASSIFY_CAPTAIN_RE_DEFAULT='^[[:space:]]*done:|^[[:space:]]*ready:|^[[:space:]]*needs-decision:|^[[:space:]]*blocked:|^[[:space:]]*failed:|PR ready|checks green|ready in branch|merged'
+
+# The PRE-VALIDATION HANDOFF verb. A no-mistakes worker appends
+#   ready: <summary>
+# when the implementation is committed and it is waiting for firstmate to tell it
+# to run /no-mistakes. It exists because `done:` was doing two jobs - "I have
+# finished implementing, now validate" and "the task is complete" - and under the
+# terminal-claim contract the second meaning is the only one `done:` may carry:
+# a pre-validation `done:` names no commit identity, so it stood as a claim
+# nothing could ever establish and downgraded the task from the moment the worker
+# followed its own brief. Separating the words makes `done:` terminal by
+# construction rather than by a reader's special case.
+#
+# It is CAPTAIN-RELEVANT, because a handoff waiting on firstmate to say "run
+# /no-mistakes" is exactly the thing firstmate must see, and that is what `done:`
+# used to buy here. It is deliberately NOT terminal: status_is_terminal_verb says
+# no, and fm_done_claim_last does not read it as a claim, because nothing has
+# been delivered yet. FM_CLASSIFY_READY_VERB overrides it.
+FM_CLASSIFY_READY_VERB_DEFAULT='ready'
 
 # The deliberate-external-wait verb. A crew (or firstmate steering it) appends
 #   paused: <reason>
@@ -138,6 +175,9 @@ last_status_line() {
 # 0 if the given (last) status line's leading verb is a real terminal captain verb
 # (done, needs-decision, blocked, failed). Free-text tokens alone never count here;
 # callers that need legacy free-text matching use status_is_captain_relevant.
+# The pre-validation handoff verb is captain-relevant but NOT terminal, so it is
+# absent here on purpose: a worker waiting to be told to validate has delivered
+# nothing yet.
 status_is_terminal_verb() {
   local line=$1 verb
   [ -n "$line" ] || return 1
@@ -146,6 +186,46 @@ status_is_terminal_verb() {
     done|needs-decision|blocked|failed) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# 0 when a status line carries a state this fleet recognises. The built-in verb
+# set comes first; three of its members are overridable constants, so it is
+# assembled from those owners rather than re-listed as literals. `done-unverified`
+# is deliberately absent: it is a current-STATE token bin/fm-crew-state.sh
+# reports, never a verb anything writes into a status file.
+#
+# Beyond that set, whatever status_is_captain_relevant recognises is recognised
+# here too, because that function is the one owner of the configurable
+# vocabulary: FM_CAPTAIN_RE overrides the whole captain-relevant set, and its
+# default also matches legacy free-text lines ("merged", "PR ready"). A home
+# that configures its own verbs, or a legacy bare line the fleet already routes
+# as a real state, must not then be labelled as matching no status verb.
+status_line_verb_is_known() {  # <status-line>
+  local verb
+  verb=$(status_line_verb "${1:-}")
+  case "$verb" in
+    working|needs-decision|blocked|done|failed|note) return 0 ;;
+  esac
+  [ "$verb" = "${FM_CLASSIFY_READY_VERB:-$FM_CLASSIFY_READY_VERB_DEFAULT}" ] && return 0
+  [ "$verb" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ] && return 0
+  [ "$verb" = "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}" ] && return 0
+  [ "$verb" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ] && return 0
+  status_is_captain_relevant "${1:-}" && return 0
+  return 1
+}
+
+# 0 when a non-blank status line carries no recognised verb at all - a worker
+# writing prose ("Migration syntax: OK", "- ruff check: all passed") into the
+# status file. Such a line wakes firstmate and then classifies as nothing, so it
+# used to be absorbed silently and its words were lost. It is surfaced instead:
+# losing a worker's words is worse than showing an unclassifiable line, and this
+# never rejects the line or asks the worker to rewrite it.
+status_line_is_unrecognized() {  # <status-line>
+  case "${1:-}" in
+    *[![:space:]]*) ;;
+    *) return 1 ;;
+  esac
+  ! status_line_verb_is_known "$1"
 }
 
 # 0 if the given (last) status line matches a captain-relevant verb.
@@ -167,6 +247,7 @@ status_is_captain_relevant() {
     case "$verb" in
       done|needs-decision|blocked|failed) return 0 ;;
     esac
+    [ "$verb" = "${FM_CLASSIFY_READY_VERB:-$FM_CLASSIFY_READY_VERB_DEFAULT}" ] && return 0
   fi
   printf '%s' "$line" | grep -qiE "${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT}"
 }
@@ -386,6 +467,20 @@ status_line_note() {  # <status-line> -> text after the first colon, trimmed
     n=${n#"${n%%[![:space:]]*}"}
   fi
   printf '%s' "$n"
+}
+# 0 when the line STATES a routed key token, in either documented position:
+# before the line's first colon, or at the head of the note. This is the one
+# owner of that question, so nothing has to re-derive it from one spelling and
+# then disagree with the fold about a single line - _fm_decision_key below reads
+# the same pair of positions, and bin/fm-done-claim-lib.sh's authority rule asks
+# here rather than testing a prefix itself.
+#
+# Slug VALIDITY is a separate question (_fm_decision_slug_ok): a malformed token
+# is still a token the writer stated, and a reader deciding whether a line speaks
+# for the whole task wants the statement, not its well-formedness.
+status_line_states_key() {  # <status-line>
+  _fm_key_before_colon "$1" && return 0
+  _fm_key_at_note_head "$1" >/dev/null
 }
 _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
   local k
@@ -1292,6 +1387,32 @@ $snapshot
 EOF
 }
 
+# Pull an already-acknowledged span back to where a bounded section actually
+# stopped presenting. <held-endpoints> is a "<task>\t<byte-endpoint>" list from
+# a caller that showed only part of a task's unread span; that task then
+# acknowledges exactly the bytes it showed, so the lines it held back stay
+# unread and re-present on the next drain instead of being skipped past. Only
+# ever moves an endpoint backwards, so it can never acknowledge more than the
+# acknowledgement it is given.
+status_hold_presented_spans() {  # <acknowledged> <held-endpoints>
+  local acknowledged=$1 held=${2:-} task endpoint ident held_task held_endpoint
+  while IFS=$(printf '\t') read -r task endpoint ident; do
+    [ -n "$task" ] || continue
+    while IFS=$(printf '\t') read -r held_task held_endpoint; do
+      [ "$held_task" = "$task" ] || continue
+      case "$held_endpoint" in ''|*[!0-9]*) continue ;; esac
+      case "$endpoint" in ''|*[!0-9]*) continue ;; esac
+      [ "$held_endpoint" -lt "$endpoint" ] || continue
+      endpoint=$held_endpoint
+    done <<EOF
+$held
+EOF
+    printf '%s\t%s\t%s\n' "$task" "$endpoint" "$ident" || return 1
+  done <<EOF
+$acknowledged
+EOF
+}
+
 status_commit_presentation_snapshot() {  # <state> <snapshot>
   local state=$1 snapshot=$2 task endpoint ident f cur_ident size tmp backstop acknowledged_task acknowledged_endpoint
   tmp="$state/.status-presentation-cursor.tmp.$$"
@@ -1465,12 +1586,14 @@ status_new_lines_since_cursor() {  # <status-file> [<captured-end-offset>]
   return "$rc"
 }
 
-# 0 when a status line is an informational `note:` or a reserved-key
-# pending-reply resolution. Those lines never fold into OPEN DECISIONS, so the
-# drain's unread-status surface is their only guaranteed presentation.
+# 0 when a status line is an informational `note:`, a reserved-key pending-reply
+# resolution, or a line carrying no recognised verb at all. None of these fold
+# into OPEN DECISIONS, so the drain's unread-status surface is their only
+# guaranteed presentation.
 status_line_is_unread_surface() {  # <status-line>
   local line=$1 verb key note resolve held prefix
   [ -n "$line" ] || return 1
+  status_line_is_unrecognized "$line" && return 0
   verb=$(status_line_verb "$line")
   [ "$verb" = note ] && return 0
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
@@ -1496,17 +1619,24 @@ status_line_is_unread_surface() {  # <status-line>
 # still-unread `note:` or pending-reply resolution, in glob (task id) order.
 # Prints nothing when none are unread. Directory scan rejects status symlinks
 # the same way scan_open_decisions does.
+# Each row carries the 1-based index of the line within that task's unread span,
+# so a caller that presents only part of the span can name where it stopped and
+# status_unread_span_endpoint_through can turn that back into a byte offset. The
+# index counts every non-blank line in the span, not only the surfaced ones,
+# because the cursor advances over bytes rather than over surfaced lines.
 scan_unread_surface_lines() {  # <state>
-  local state=$1 f task lines line
+  local state=$1 f task lines line index
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
     task=$(basename "$f"); task="${task%.status}"
     lines=$(status_new_lines_since_cursor "$f") || return 1
     [ -n "$lines" ] || continue
+    index=0
     while IFS= read -r line; do
       [ -n "$line" ] || continue
+      index=$((index + 1))
       status_line_is_unread_surface "$line" || continue
-      printf '%s\t%s\n' "$task" "$line"
+      printf '%s\t%s\t%s\n' "$task" "$index" "$line"
     done <<EOF
 $lines
 EOF
@@ -1515,22 +1645,70 @@ EOF
 }
 
 scan_unread_surface_snapshot() {  # <state> <task-and-endpoint-snapshot>
-  local state=$1 snapshot=$2 task endpoint ident f lines line
+  local state=$1 snapshot=$2 task endpoint ident f lines line index
   while IFS=$(printf '\t') read -r task endpoint ident; do
     [ -n "$task" ] || continue
     f="$state/$task.status"
     lines=$(status_new_lines_since_cursor "$f" "$endpoint") || return 1
     [ -n "$lines" ] || continue
+    index=0
     while IFS= read -r line; do
       [ -n "$line" ] || continue
+      index=$((index + 1))
       status_line_is_unread_surface "$line" || continue
-      printf '%s\t%s\n' "$task" "$line"
+      printf '%s\t%s\t%s\n' "$task" "$index" "$line"
     done <<EOF
 $lines
 EOF
   done <<EOF
 $snapshot
 EOF
+}
+
+# The byte endpoint just past the <n>th non-blank line of a task's unread span,
+# for a caller that presented only that much of it. The status log is
+# append-only and the span is contiguous, so this is the SAME cursor the full
+# advance uses, stopped earlier - not a second one. An <n> of 0 is the cursor
+# itself (nothing presented, nothing acknowledged); an <n> at or past the span's
+# last line is the captured endpoint.
+status_unread_span_endpoint_through() {  # <status-file> <captured-end-offset> <n>
+  local f=$1 captured_end=$2 want=$3 offset span_file consumed=0 seen=0 line bytes
+  # The cursor is a BYTE offset, and ${#line} below counts CHARACTERS under any
+  # UTF-8 locale. A worker's prose is arbitrary text, so one multibyte character
+  # anywhere in a partly presented span would land the committed cursor mid-line
+  # and make the next drain read the tail of an already-presented line as a whole
+  # new status line - a fabricated line, in the one surface whose whole purpose
+  # is showing a worker's words faithfully. Counting in C makes the arithmetic
+  # bytes; bash restores the caller's locale when this function returns.
+  local LC_ALL=C
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 1
+  case "$captured_end" in ''|*[!0-9]*) return 1 ;; esac
+  case "$want" in ''|*[!0-9]*) return 1 ;; esac
+  offset=$(status_presentation_cursor_offset "$f") || return 1
+  case "$offset" in ''|*[!0-9]*) return 1 ;; esac
+  if [ "$want" -eq 0 ] || [ "$offset" -ge "$captured_end" ]; then
+    printf '%s' "$offset"
+    return 0
+  fi
+  span_file="$(_fm_open_decisions_cursor_path "$f").presented.$$"
+  _fm_status_read_span "$f" "$offset" "$((captured_end - offset))" > "$span_file" 2>/dev/null \
+    || { rm -f "$span_file"; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    bytes=$((${#line} + 1))
+    consumed=$((consumed + bytes))
+    case "$line" in
+      *[![:space:]]*)
+        seen=$((seen + 1))
+        if [ "$seen" -ge "$want" ]; then break; fi
+        ;;
+    esac
+  done < "$span_file"
+  rm -f "$span_file"
+  if [ "$seen" -lt "$want" ] || [ "$((offset + consumed))" -ge "$captured_end" ]; then
+    printf '%s' "$captured_end"
+    return 0
+  fi
+  printf '%s' "$((offset + consumed))"
 }
 
 # Fold material routed-work phases in the same keyed event stream.

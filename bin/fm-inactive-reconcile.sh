@@ -10,13 +10,17 @@
 # not a watcher, daemon, PR poll, or forge client of its own.
 # In a secondmate home every `scan` invocation, which is every watcher poll,
 # first runs the LEDGER-FIRST parent delivery: a direct child whose status
-# ledger ends in a whole `done:` or `failed:` line has stated its own outcome,
-# so that line is published on the parent channel at once through
-# bin/fm-parent-channel-lib.sh as
-#   <state> [key=child-outcome-<child>-<state>-<fp8>]: child <child> <state>: <note> [pr=<url>] [mode=<mode>] [yolo=<posture>] [report=data/<child>/report.md]
+# ledger ends in a whole `done:` or `failed:` line spoken in its own voice has
+# stated its own outcome, so that line is published on the parent channel at
+# once through bin/fm-parent-channel-lib.sh as
+#   <verb> [key=child-outcome-<child>-<state>-<fp8>]: child <child> <state>: <note> [pr=<url>] [mode=<mode>] [yolo=<posture>] [report=data/<child>/report.md] [claim=<verdict>]
 # carrying the child's recorded PR, delivery mode, merge posture, and scout
 # report pointer, without consulting fm-crew-state.sh and without waiting for
-# the inactive cadence. A line still being appended (no trailing newline yet)
+# the inactive cadence. The leading <verb> is the child's own state, except
+# that a `done` whose terminal claim is not established is published as
+# `blocked` with `claim=<verdict>` naming what the claim actually is, so the
+# parent's durable record cannot read done while the child's home reports
+# done-unverified. A line still being appended (no trailing newline yet)
 # is left for the next poll. This is what keeps a mate's PR-ready, finding,
 # and failure outcomes from depending on the mate model appending them
 # (docs/secondmate-parent-channel.md). A main home has no parent channel and
@@ -44,11 +48,15 @@
 # It considers only a direct ordinary crewmate whose newest meta, status, or
 # turn-ended mtime is older than that interval and whose last status is not
 # captain-held. In a secondmate home a child whose ledger already ends in a
-# terminal done or failed line belongs to the ledger-first path above and is
-# skipped here, so one outcome is never reported twice. It then uses
-# fm-crew-state.sh as the sole current-state source.
-# Only a done or failed state is suspicious enough to create a durable terminal
-# outcome record or wake the supervisor.
+# terminal done or failed line spoken in its own voice belongs to the
+# ledger-first path above and is skipped here, so one outcome is never reported
+# twice. It then uses fm-crew-state.sh as the sole current-state source.
+# Only a done, done-unverified, or failed state, or the pre-validation `ready`
+# handoff, is suspicious enough to create a durable terminal outcome record or
+# wake the supervisor: an unestablished claim is an outcome nobody delivered,
+# and a stopped worker waiting on firstmate is an action nobody took, which is
+# what this backstop exists to catch. `ready` is reported as the handoff it is
+# rather than as a terminal outcome.
 # Working, paused, parked, blocked, unknown, persistent secondmates, and
 # captain-held work retain their existing supervision semantics.
 #
@@ -96,6 +104,8 @@ CREW_STATE_BIN="${FM_INACTIVE_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-done-claim-lib.sh
+. "$SCRIPT_DIR/fm-done-claim-lib.sh"
 
 FM_INACTIVE_RECONCILE_SECS=${FM_INACTIVE_RECONCILE_SECS:-900}
 case "$FM_INACTIVE_RECONCILE_SECS" in
@@ -332,9 +342,28 @@ home_secondmate_id() {
   fm_parent_channel_home_id "$FM_HOME"
 }
 
+# 0 when this inactive report is about the PRE-VALIDATION HANDOFF rather than a
+# terminal outcome. `ready` is defined as deliberately not terminal
+# (bin/fm-classify-lib.sh owns the verb, and status_is_terminal_verb says no to
+# it), so every line this backstop writes about it has to say what was actually
+# observed: a worker that stopped waiting on firstmate, not work that finished.
+inactive_report_is_handoff() { # <state>
+  [ "$1" = "${FM_CLASSIFY_READY_VERB:-$FM_CLASSIFY_READY_VERB_DEFAULT}" ]
+}
+
 report_to_parent() { # <task> <state> <outcome-key> <fingerprint> <pr>
   local task=$1 state=$2 outcome_key=$3 fingerprint=$4 pr=$5 line
-  line="$state [key=$outcome_key]: inactive terminal child=$task fingerprint=$fingerprint"
+  # The parent channel is a status stream, so this line must lead with a verb the
+  # parent's classifier knows. A terminal state that is not one - an unverified
+  # claim - is a blocker for the parent rather than a completion, and names its
+  # real state in the note instead of being reported as done.
+  if inactive_report_is_handoff "$state"; then
+    line="$state [key=$outcome_key]: inactive handoff waiting on firstmate child=$task fingerprint=$fingerprint"
+  elif status_line_verb_is_known "$state:"; then
+    line="$state [key=$outcome_key]: inactive terminal child=$task fingerprint=$fingerprint"
+  else
+    line="blocked [key=$outcome_key]: inactive terminal child=$task state=$state fingerprint=$fingerprint"
+  fi
   [ -z "$pr" ] || line="$line pr=$pr"
   fm_parent_channel_report "$FM_HOME" "$STATE" "$line"
 }
@@ -353,7 +382,9 @@ notice_parent_report_failed() { # <record> <fingerprint> <payload>
 
 # The whole terminal line a child's ledger ends in, or non-zero when the ledger
 # is absent, unusable, still being appended (no trailing newline yet), or does
-# not end in a done or failed line.
+# not end in a terminal line the child spoke in its own voice. A routed phase
+# closing with `done [key=<slug>]` is a sub-event, not the child finishing, and
+# bin/fm-done-claim-lib.sh owns that distinction for every reader.
 child_terminal_ledger_line() { # <status>
   local status=$1 snapshot last marker='__FM_LEDGER_SNAPSHOT_END__'
   [ -f "$status" ] && [ ! -L "$status" ] && [ -s "$status" ] || return 1
@@ -361,10 +392,8 @@ child_terminal_ledger_line() { # <status>
   case "$snapshot" in *$'\n'"$marker") ;; *) return 1 ;; esac
   snapshot=${snapshot%"$marker"}
   last=$(printf '%s' "$snapshot" | grep -v '^[[:space:]]*$' | tail -1)
-  case "$(status_line_verb "$last")" in
-    done|failed) printf '%s\n' "$last" ;;
-    *) return 1 ;;
-  esac
+  fm_done_claim_own_terminal_verb "$last" >/dev/null || return 1
+  printf '%s\n' "$last"
 }
 
 # Claim one already-delivered inactive fallback as the delivery of this ledger
@@ -398,13 +427,39 @@ claim_inactive_report_for_ledger() { # <task> <incarnation> <state> <ledger-fing
 # delivered, or nothing is owed, and 1 when it is owed but the parent channel
 # could not be written (the notice is queued once per record).
 report_child_ledger_locked() { # <id> <meta>
-  local id=$1 meta=$2 status last previous state note pr mode yolo data incarnation fingerprint predecessor_head outcome_key line
+  local id=$1 meta=$2 status last previous state verb claim note pr mode yolo data incarnation fingerprint predecessor_head outcome_key line
   status="$STATE/$id.status"
   last=$(child_terminal_ledger_line "$status") || return 0
-  state=$(status_line_verb "$last")
+  state=$(fm_done_claim_own_terminal_verb "$last") || return 0
   pr=$(pr_for_task "$meta" "$last")
   incarnation=$(meta_incarnation "$meta")
-  fingerprint=$(sha256_text "$incarnation|$id|$state|ledger|$last")
+  # The same rule report_to_parent applies, at the other delivery path into the
+  # parent channel: a `done` the child only ASSERTED is not a completion the
+  # parent may record as one. It is published as a blocker naming what the claim
+  # actually is, so the parent's durable record cannot say done while the child's
+  # own home says done-unverified. A `failed` line, and a `done` whose verdict IS
+  # verified, are unchanged.
+  #
+  # The verdict is therefore part of this event's IDENTITY, not only of its
+  # wording, and that is what the fingerprint below carries. A report about an
+  # unestablished claim is a report about an UNSETTLED state, and retiring it as
+  # though it were settled is how a pessimistic record rots: a child reported
+  # upward as `claim=unverified` while its PR was still unregistered would stay
+  # blocked on the parent's record forever once bin/fm-pr-check.sh established
+  # the claim, because the ledger line it was computed from never changed. With
+  # the verdict in the identity, a later establishment is a genuinely NEW event
+  # that publishes a corrected line, while a report whose verdict has not moved
+  # is still the same event and stays deduplicated exactly as before.
+  verb=$state
+  claim=
+  if [ "$state" = "done" ]; then
+    fm_done_claim_status "$STATE" "$id"
+    case "$FM_DONE_CLAIM_STATE" in
+      verified|none) ;;
+      *) verb=blocked; claim=$FM_DONE_CLAIM_STATE ;;
+    esac
+  fi
+  fingerprint=$(sha256_text "$incarnation|$id|$state|$claim|ledger|$last")
   previous=$(grep -v '^[[:space:]]*$' "$status" 2>/dev/null \
     | tail -2 | awk 'NR == 1 { first = $0 } NR == 2 { print first }' || true)
   predecessor_head=$(sha256_text "$previous")
@@ -423,13 +478,14 @@ report_child_ledger_locked() { # <id> <meta>
   mode=$(clean_field "$(meta_field "$meta" mode)")
   yolo=$(clean_field "$(meta_field "$meta" yolo)")
   data="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
-  line="$state [key=$outcome_key]: child $id $state: $note"
+  line="$verb [key=$outcome_key]: child $id $state: $note"
   [ -z "$pr" ] || line="$line pr=$pr"
   [ -z "$mode" ] || line="$line mode=$mode"
   [ -z "$yolo" ] || line="$line yolo=$yolo"
   if [ -f "$data/$id/report.md" ] && [ ! -L "$data/$id/report.md" ]; then
     line="$line report=data/$id/report.md"
   fi
+  [ -z "$claim" ] || line="$line claim=$claim"
   if fm_parent_channel_report "$FM_HOME" "$STATE" "$line"; then
     mark_reported "$RECORD_PENDING" || return 1
     return 0
@@ -492,12 +548,24 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
   last=$(last_status_line "$status")
-  if [ -n "$self" ]; then
-    case "$(status_line_verb "$last")" in done|failed) return 0 ;; esac
+  if [ -n "$self" ] && fm_done_claim_own_terminal_verb "$last" >/dev/null; then
+    return 0
   fi
+  # bin/fm-crew-state.sh reports an unverified terminal CLAIM as
+  # `done-unverified`, and that is still a terminal outcome nobody has
+  # delivered - the whole reason this backstop exists. Matching only `done`
+  # would silently drop exactly the outcomes that most need a supervisor.
+  #
+  # `ready` is here for the same reason. It is not terminal, but a stopped
+  # worker that has handed off for validation is waiting on a supervisor action
+  # nobody has taken, which is the state this backstop exists to catch; the same
+  # handoff reached this path as a pre-validation `done:` before it had a verb of
+  # its own, and giving it one must not quietly remove its backstop.
   case "$state_line" in
     'state: done '*) state='done' ;;
+    'state: done-unverified '*) state='done-unverified' ;;
     'state: failed '*) state='failed' ;;
+    'state: ready '*) state='ready' ;;
     *) return 0 ;;
   esac
   pr=$(pr_for_task "$meta")
@@ -514,13 +582,22 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     if report_to_parent "$id" "$state" "$outcome_key" "$fingerprint" "$pr"; then
       mark_reported "$RECORD_PENDING" || return 1
     else
-      notice_parent_report_failed "$RECORD_PENDING" "$fingerprint" \
-        "inactive terminal outcome needs parent report: child=$id state=$state"
+      if inactive_report_is_handoff "$state"; then
+        notice_parent_report_failed "$RECORD_PENDING" "$fingerprint" \
+          "inactive handoff waiting on firstmate needs parent report: child=$id state=$state"
+      else
+        notice_parent_report_failed "$RECORD_PENDING" "$fingerprint" \
+          "inactive terminal outcome needs parent report: child=$id state=$state"
+      fi
     fi
     return 0
   fi
   record_phase_set "$RECORD_PENDING" presentation || return 1
-  payload="inactive terminal outcome awaiting captain presentation: child=$id state=$state"
+  if inactive_report_is_handoff "$state"; then
+    payload="inactive handoff waiting on firstmate awaiting captain presentation: child=$id state=$state"
+  else
+    payload="inactive terminal outcome awaiting captain presentation: child=$id state=$state"
+  fi
   [ -z "$pr" ] || payload="$payload pr=$pr"
   queue_presentation "$RECORD_PENDING" "$fingerprint" "$payload" || true
 }

@@ -10,6 +10,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$ROOT/bin/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-done-claim-lib.sh
+. "$ROOT/bin/fm-done-claim-lib.sh"
 
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 BEARINGS="$ROOT/bin/fm-bearings-snapshot.sh"
@@ -65,6 +67,21 @@ run_bearings() {  # <home> [extra args]
   shift
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_BEARINGS_NOW=2026-07-14T12:00:00Z \
     "$BEARINGS" --json "$@"
+}
+
+# A claim the forge and the validation run established earlier, with those
+# sources since gone. That is the ordinary absence case cleanup's standing-record
+# rescue exists for: these fixtures run against a fake forge that answers
+# nothing, so the claim can no longer be re-established from scratch even though
+# it was true when it was made. Written through the record's own owner so a
+# fixture cannot drift from the format the gate reads.
+establish_claim() {  # <home> <id> <claim-line> <evaluated-head>
+  local home=$1 id=$2 claim=$3 head=$4 hash
+  hash=$(fm_done_claim_hash "$claim") \
+    || fail "could not compute a claim identity for $id"
+  fm_done_verdict_write "$home/state" "$id" verified "$hash" \
+    "the forge carried this head when the claim was established" "$head" \
+    || fail "could not establish the claim for $id"
 }
 
 run_teardown() {  # <home> <id>
@@ -291,7 +308,7 @@ write_scout_with_attested_inventory() {  # <home> <scout-id> <keys>
     "spawn_gen=fixture-$scout" \
     "decisions_reviewed=1" \
     "decision_keys=$keys"
-  printf 'done: report complete\n' > "$home/state/$scout.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$scout" > "$home/state/$scout.status"
   printf '# Report\n\nThe investigation finished.\n' > "$home/data/$scout/report.md"
 }
 
@@ -449,7 +466,7 @@ test_complete_accepts_a_migrated_inventory_on_beads() {
     "harness=codex" \
     "kind=scout" \
     "spawn_gen=fixture-$scout"
-  printf 'done: report complete\n' > "$home/state/$scout.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$scout" > "$home/state/$scout.status"
   mkdir -p "$home/data/$scout"
   printf '# Report\n\nThe investigation finished.\n' > "$home/data/$scout/report.md"
 
@@ -645,7 +662,7 @@ test_uninventoried_report_decision_refuses_completion() {
 ## Done
 EOF
   write_origin_meta "$home" "$id"
-  printf 'done: report and visual review complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report and visual review complete\n' "$id" > "$home/state/$id.status"
   cat > "$home/data/$id/report.md" <<'EOF'
 # Sample route review
 
@@ -770,7 +787,7 @@ test_answer_records_and_closes() {
   tasks_in "$home" add "$id" "Guard the answer path" --kind scout --repo sample --start >/dev/null \
     || fail "could not create the answer-guard origin"
   write_origin_meta "$home" "$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Guard review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-guard-call \
     --title "Choose the guard option" --reason "captain guard choice pending" --repo sample >/dev/null \
@@ -1129,7 +1146,7 @@ test_out_of_band_close_is_recordable() {
   tasks_in "$home" add "$id" "Investigate the sample full run" --kind scout --repo sample --start >/dev/null \
     || fail "could not create out-of-band origin"
   write_origin_meta "$home" "$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Sample full run review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-submission-call --title "Choose the sample submission" \
     --reason "captain submission choice pending" --repo sample --origin "$id" >/dev/null \
@@ -1190,7 +1207,7 @@ test_visual_review_uses_shared_completion_owner() {
   mkdir -p "$home/data/$id"
   tasks_in "$home" add "$id" "Review the sample board" --kind scout --repo sample --start >/dev/null
   write_origin_meta "$home" "$id"
-  printf 'done: investigation complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - investigation complete\n' "$id" > "$home/state/$id.status"
   printf '# Sample board investigation\n\nThe initial findings need no captain choice.\n' > "$home/data/$id/report.md"
   run_captain "$home" complete "$id" --none >/dev/null \
     || fail "initial investigation could not pass the shared completion owner"
@@ -1245,8 +1262,8 @@ test_terminal_single_owner_status_decision_does_not_block_empty_inventory() {
   mkdir -p "$home/data/$id"
   tasks_in "$home" add "$id" "Review a terminal sample finding" --kind scout --repo sample --start >/dev/null
   write_origin_meta "$home" "$id"
-  printf 'needs-decision [key=default]: choose route A or route B\ndone: report complete\n' \
-    > "$home/state/$id.status"
+  printf 'needs-decision [key=default]: choose route A or route B\ndone: report=data/%s/report.md - report complete\n' \
+    "$id" > "$home/state/$id.status"
   printf '# Terminal sample review\n\nNo unresolved captain choice remains.\n' > "$home/data/$id/report.md"
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
@@ -1294,7 +1311,7 @@ EOF
   mkdir -p "$mate/data/$origin"
   tasks_in "$mate" add "$origin" "Investigate secondmate sample" --kind scout --repo sample --start >/dev/null
   write_origin_meta "$mate" "$origin"
-  printf 'done: report and visual review complete\n' > "$mate/state/$origin.status"
+  printf 'done: report=data/%s/report.md - report and visual review complete\n' "$origin" > "$mate/state/$origin.status"
   printf '# Sample secondmate review\n\nOne captain choice remains.\n' > "$mate/data/$origin/report.md"
   run_captain "$mate" hold sample-release-call --title "Choose the sample release" \
     --reason "captain release choice pending" --repo sample --origin "$origin" >/dev/null \
@@ -1310,7 +1327,7 @@ EOF
   run_teardown "$mate" "$origin" >/dev/null 2> "$mate/teardown.err" \
     || fail "secondmate investigation teardown failed: $(cat "$mate/teardown.err")"
   tasks_in "$mate" "done" "$origin" --report "data/$origin/report.md" --keep 0 >/dev/null
-  grep -Eq "^done \\[key=child-outcome-$origin-done-[0-9a-f]{8}\\]: child $origin done: report and visual review complete mode=scout report=data/$origin/report.md$" \
+  grep -Eq "^done \\[key=child-outcome-$origin-done-[0-9a-f]{8}\\]: child $origin done: report=data/$origin/report.md - report and visual review complete mode=scout report=data/$origin/report.md$" \
     "$parent/state/sample-mate.status" \
     || fail "the scout's final line did not reach the parent at teardown"
 
@@ -1497,7 +1514,7 @@ test_bound_channel_answers_close_at_answer_time() {
   tasks_in "$home" add "$id" "Propose sample eval changes" --kind scout --repo sample --start >/dev/null \
     || fail "could not create the review origin"
   write_origin_meta "$home" "$id"
-  printf 'done: proposal deck ready for the captain\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - proposal deck ready for the captain\n' "$id" > "$home/state/$id.status"
   printf '# Sample eval proposal\n\nThree captain choices remain.\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-membership-call --title "Captain call: membership" \
     --reason "captain membership choice pending" --repo sample --origin "$id" >/dev/null
@@ -2018,7 +2035,7 @@ test_unbound_source_closes_no_hold() {
   tasks_in "$home" add "$id" "Review sample without binding" --kind scout --repo sample --start >/dev/null \
     || fail "could not create the unbound origin"
   write_origin_meta "$home" "$id"
-  printf 'done: deck ready\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - deck ready\n' "$id" > "$home/state/$id.status"
   printf '# Unbound review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-only-call --title "Captain call: only choice" \
     --reason "captain only choice pending" --repo sample --origin "$id" >/dev/null \
@@ -2061,7 +2078,7 @@ test_legacy_identities_keep_working() {
   mkdir -p "$home/data/$id"
   tasks_in "$home" add "$id" "Legacy-shaped review" --kind scout --repo sample --start >/dev/null
   write_origin_meta "$home" "$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Legacy review\n\nTwo captain choices remain.\n' > "$home/data/$id/report.md"
 
   hold=$(run_shim "$home" id "$id" pick-one)
@@ -2500,6 +2517,34 @@ EOF
   pass "a captain call with no routed work, a verified transfer, an open decision, and an answered call all stay silent"
 }
 
+# A finished task has no open decisions left to fold, but only a terminal line
+# the task spoke in its OWN voice says it finished. A routed phase closing with
+# `done [key=<slug>]` closes one sub-event, and folding the task away on it would
+# let `complete --none` attest that nothing is open while the captain's questions
+# still stand. The unkeyed control proves the fold still closes on the real thing.
+test_a_keyed_phase_close_does_not_fold_away_open_decisions() {
+  local home id
+  home=$(make_home keyed-close-decisions)
+  id=sample-systems-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample systems" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the investigation fixture"
+  write_origin_meta "$home" "$id"
+  cat > "$home/state/$id.status" <<'EOF'
+working: report drafted
+needs-decision [key=route]: choose route north or route south
+done [key=docs]: that routed phase landed
+EOF
+  if run_captain "$home" complete "$id" --none > "$home/keyed.out" 2> "$home/keyed.err"; then
+    fail "a closed routed phase folded the task's open captain call away and attested --none"
+  fi
+
+  printf 'done: the whole task finished\n' >> "$home/state/$id.status"
+  run_captain "$home" complete "$id" --none > "$home/own.out" 2> "$home/own.err" \
+    || fail "the task's own terminal line did not fold its open decisions away: $(cat "$home/own.err")"
+  pass "only the task's own terminal line folds its open captain decisions away"
+}
+
 # The originating work item is itself the captain call, which is what the policy
 # prefers ("hold the work item the question gates"). Cleanup of that finished
 # work must never be the act that closes the captain's own row: the deliverable
@@ -2515,7 +2560,7 @@ test_teardown_never_closes_a_captain_held_task() {
   tasks_in "$home" add "$id" "Investigate sample attachment evidence" --kind scout \
     --repo sample --start >/dev/null || fail "could not create the investigation fixture"
   write_origin_meta "$home" "$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Sample attachment evidence\n\nThe captain must choose inline or by-reference attachments.\n' \
     > "$home/data/$id/report.md"
   run_captain "$home" hold "$id" \
@@ -2550,7 +2595,7 @@ test_teardown_never_closes_a_captain_held_task() {
   tasks_in "$home" add "$plain" "Investigate the sample cache" --kind scout \
     --repo sample --start >/dev/null || fail "could not create the ordinary fixture"
   write_origin_meta "$home" "$plain"
-  printf 'done: report complete\n' > "$home/state/$plain.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$plain" > "$home/state/$plain.status"
   printf '# Sample cache\n\nNothing waits on the captain.\n' > "$home/data/$plain/report.md"
   run_captain "$home" complete "$plain" --none >/dev/null \
     || fail "completion gate failed for the ordinary investigation"
@@ -2567,7 +2612,7 @@ test_teardown_never_closes_a_captain_held_task() {
   tasks_in "$home" add "$forced" "Investigate the sample forced path" --kind scout \
     --repo sample --start >/dev/null || fail "could not create the forced fixture"
   write_origin_meta "$home" "$forced"
-  printf 'done: report complete\n' > "$home/state/$forced.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$forced" > "$home/state/$forced.status"
   printf '# Sample forced path\n\nOne captain choice remains.\n' > "$home/data/$forced/report.md"
   run_captain "$home" hold "$forced" --reason "captain must choose the sample forced path" >/dev/null \
     || fail "could not hold the forced fixture for the captain"
@@ -2597,6 +2642,7 @@ test_teardown_never_closes_a_captain_held_task() {
 test_retained_row_artifacts_survive_captain_answers() {
   local home retained_id precedence_id rejected_id rejected_local_id report_question_id
   local approved_id released_id local_id answered_id reportless_scout_id legacy_id
+  local approved_head approved_claim
   local repo wt
   local local_repo local_wt
   local precedence_pr rejected_pr approved_pr released_pr json show
@@ -2607,7 +2653,7 @@ test_retained_row_artifacts_survive_captain_answers() {
   tasks_in "$home" add "$retained_id" "Investigate retained report evidence" --kind scout \
     --repo sample --start >/dev/null || fail "could not create the retained report fixture"
   write_origin_meta "$home" "$retained_id"
-  printf 'done: report complete\n' > "$home/state/$retained_id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$retained_id" > "$home/state/$retained_id.status"
   printf '# Retained report\n\nThe captain must choose the follow-up.\n' \
     > "$home/data/$retained_id/report.md"
   run_captain "$home" hold "$retained_id" --reason "captain must choose the report follow-up" \
@@ -2627,7 +2673,7 @@ test_retained_row_artifacts_survive_captain_answers() {
   tasks_in "$home" add "$precedence_id" "Investigate $precedence_pr regression" --kind scout \
     --repo sample --start >/dev/null || fail "could not create the report precedence fixture"
   write_origin_meta "$home" "$precedence_id"
-  printf 'done: report complete\n' > "$home/state/$precedence_id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$precedence_id" > "$home/state/$precedence_id.status"
   printf '# Retained report with pull request context\n' \
     > "$home/data/$precedence_id/report.md"
   run_captain "$home" hold "$precedence_id" \
@@ -2705,7 +2751,10 @@ test_retained_row_artifacts_survive_captain_answers() {
     "window=firstmate:fm-$approved_id" "endpoint_task_id=$approved_id" "worktree=$wt" \
     "project=$repo" "harness=codex" "kind=ship" "mode=no-mistakes" \
     "pr=$approved_pr" "spawn_gen=fixture-$approved_id"
-  printf 'done: PR %s merged\n' "$approved_pr" > "$home/state/$approved_id.status"
+  approved_head=$(git -C "$wt" rev-parse HEAD)
+  approved_claim="done: pr=$approved_pr head=$approved_head - merged"
+  printf '%s\n' "$approved_claim" > "$home/state/$approved_id.status"
+  establish_claim "$home" "$approved_id" "$approved_claim" "$approved_head"
   run_captain "$home" hold "$approved_id" --reason "captain merge approval pending" \
     >/dev/null || fail "could not hold the approved merge"
   printf 'Merge the approved pull request.\n' > "$home/approved-answer.txt"
@@ -2732,7 +2781,8 @@ test_retained_row_artifacts_survive_captain_answers() {
     "window=firstmate:fm-$local_id" "endpoint_task_id=$local_id" "worktree=$local_wt" \
     "project=$local_repo" "harness=codex" "kind=ship" "mode=local-only" \
     "spawn_gen=fixture-$local_id"
-  printf 'done: local merge ready\n' > "$home/state/$local_id.status"
+  printf 'done: branch=fm/%s head=%s - local merge ready\n' \
+    "$local_id" "$(git -C "$local_wt" rev-parse HEAD)" > "$home/state/$local_id.status"
   run_captain "$home" hold "$local_id" --reason "captain local merge approval pending" \
     >/dev/null || fail "could not hold the released local merge"
   printf 'Land the approved change locally.\n' > "$home/local-answer.txt"
@@ -2757,7 +2807,7 @@ test_retained_row_artifacts_survive_captain_answers() {
     --kind scout --repo sample --start >/dev/null \
     || fail "could not create the released report fixture"
   write_origin_meta "$home" "$released_id"
-  printf 'done: report complete\n' > "$home/state/$released_id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$released_id" > "$home/state/$released_id.status"
   printf '# Released report\n' > "$home/data/$released_id/report.md"
   run_captain "$home" hold "$released_id" --reason "captain report release pending" \
     >/dev/null || fail "could not hold the released report"
@@ -2862,7 +2912,7 @@ test_interrupted_cleanup_keeps_the_captain_call_recoverable() {
   fm_write_meta "$home/state/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
     "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Failed cleanup\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
   run_captain "$home" hold "$id" --reason "captain must choose after cleanup retry" >/dev/null \
     || fail "could not hold the cleanup-failure fixture"
@@ -2921,7 +2971,7 @@ test_answer_before_cleanup_replay_preserves_the_retained_report() {
   fm_write_meta "$home/state/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
     "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Interrupted cleanup\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
   run_captain "$home" hold "$id" --reason "captain must choose after interrupted cleanup" \
     >/dev/null || fail "could not hold the answer-before-replay fixture"
@@ -2975,7 +3025,7 @@ test_unusable_pending_close_record_names_its_reason() {
   fm_write_meta "$home/state/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
     "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Unusable pending close\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
   run_captain "$home" hold "$id" --reason "captain must choose after interrupted cleanup" \
     >/dev/null || fail "could not hold the unusable pending-close fixture"
@@ -3034,7 +3084,7 @@ EOF
   fm_write_meta "$home/state/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
     "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Relocated interrupted cleanup\n\nThe captain call remains open.\n' > "$data/$id/report.md"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
@@ -3111,7 +3161,10 @@ EOF
     --repo sample --start --file "$data/backlog.md" >/dev/null) \
     || fail "could not create the relocated captain-hold fixture"
   write_origin_meta "$home" "$id"
-  printf 'done: report complete\n' > "$home/state/$id.status"
+  # This home's data root is relocated, and the claim still uses the ordinary
+  # home-relative form: a relative report= resolves against the configured data
+  # root, so the same claim reads the same file wherever that root sits.
+  printf 'done: report=data/%s/report.md - report complete\n' "$id" > "$home/state/$id.status"
   printf '# Relocated hold\n\nThe captain call remains open.\n' > "$data/$id/report.md"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
@@ -3142,7 +3195,7 @@ EOF
 }
 
 test_merge_approval_releases_before_zero_done_retention() {
-  local home id archive repo wt pr show
+  local home id archive repo wt pr show merge_head merge_claim
   home=$(make_home zero-done-retention)
   id=sample-zero-retention-merge
   archive="$home/data/done-archive.md"
@@ -3159,7 +3212,10 @@ test_merge_approval_releases_before_zero_done_retention() {
     "window=firstmate:fm-$id" "endpoint_task_id=$id" "worktree=$wt" \
     "project=$repo" "harness=codex" "kind=ship" "mode=no-mistakes" \
     "pr=$pr" "spawn_gen=fixture-$id"
-  printf 'done: merge ready\n' > "$home/state/$id.status"
+  merge_head=$(git -C "$wt" rev-parse HEAD)
+  merge_claim="done: pr=$pr head=$merge_head - merge ready"
+  printf '%s\n' "$merge_claim" > "$home/state/$id.status"
+  establish_claim "$home" "$id" "$merge_claim" "$merge_head"
   run_captain "$home" hold "$id" --reason "captain merge approval pending" >/dev/null \
     || fail "could not hold the zero-retention merge"
   printf 'Merge the approved change.\n' > "$home/merge-answer.txt"
@@ -3877,6 +3933,7 @@ test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
 test_legitimate_holds_produce_no_divergence_signal
+test_a_keyed_phase_close_does_not_fold_away_open_decisions
 test_teardown_never_closes_a_captain_held_task
 test_retained_row_artifacts_survive_captain_answers
 test_interrupted_cleanup_keeps_the_captain_call_recoverable

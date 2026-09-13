@@ -1899,13 +1899,13 @@ fi
 
 # Shared by both the first-notification and already-notified paths below so
 # the retirement sequence (bin/fm-pr-lib.sh) is stated once.
-retire_merged_pr_poll() {  # <id>
-  local id=$1
-  if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" merged; then
+retire_terminal_pr_poll() {  # <id> <outcome>
+  local id=$1 outcome=$2
+  if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" "$outcome"; then
     fm_pr_poll_retirement_recover_one "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
-      || triage_log "merged PR poll retirement remains recoverable for $id"
+      || triage_log "$outcome PR poll retirement remains recoverable for $id"
   else
-    triage_log "merged PR poll retirement deferred because its canonical snapshot changed for $id"
+    triage_log "$outcome PR poll retirement deferred because its canonical snapshot changed for $id"
   fi
 }
 
@@ -2047,18 +2047,41 @@ while :; do
       fi
       if [ -n "$out" ]; then
         reason="check: $c: $out"
-        if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
-          if ! fm_merge_authority_read "$STATE" "$id" \
-              "$provider" "$host" "$path" "$number"; then
-            triage_log "no matching persisted merge authority for $id; recording an external merge outcome"
+        # Both PR-poll terminal outcomes publish through the one owner
+        # (bin/fm-merge-outcome-lib.sh), which dedupes on PR identity AND
+        # outcome, and both retire the poll once their outcome is RECORDED. A
+        # poll exists to observe a terminal outcome; once that outcome is durably
+        # on record its job is finished and asking the forge again is pure waste.
+        # A close used to keep polling on the ground that it can be reopened and
+        # merged - the recorded contradiction now carries that instead, and a
+        # reopen that goes on to merge still reaches the merged path through the
+        # poll re-armed at re-registration.
+        # Both retire on the same condition, which is the emitter returning 0:
+        # that IS the outcome being recorded, marker and publication together.
+        # An outcome that could not be recorded exits above without retiring, so
+        # its poll stays armed and brings it back. Nothing narrower belongs here -
+        # a close with no standing claim writes no verdict and is still fully
+        # recorded (the poll is armed at PR registration, long before any claim
+        # exists), and gating on the verdict would leave that ordinary case
+        # polling forever and would deny the close the retry the merge arm gets.
+        # Merge authority is read only for a merge: it records who authorized
+        # THIS home's merge, and a close was authorized by nobody here.
+        if [ "$is_pr_poll" -eq 1 ] && { [ "$out" = merged ] || [ "$out" = closed-unmerged ]; }; then
+          merge_authority=
+          merge_authority_record_identity=
+          if [ "$out" = merged ]; then
+            if ! fm_merge_authority_read "$STATE" "$id" \
+                "$provider" "$host" "$path" "$number"; then
+              triage_log "no matching persisted merge authority for $id; recording an external merge outcome"
+            fi
+            merge_authority=$FM_MERGE_AUTHORITY
+            merge_authority_record_identity=$FM_MERGE_AUTHORITY_RECORD_IDENTITY
           fi
-          merge_authority=$FM_MERGE_AUTHORITY
-          merge_authority_record_identity=$FM_MERGE_AUTHORITY_RECORD_IDENTITY
           merge_outcome_rc=0
-          fm_merge_outcome_report "$FM_HOME" "$STATE" "$id" "$url" poll \
+          fm_merge_outcome_report "$FM_HOME" "$STATE" "$id" "$url" poll "$out" \
             "$merge_authority" || merge_outcome_rc=$?
           if [ "$merge_outcome_rc" -ne 0 ]; then
-            triage_log "merge outcome for $id could not be recorded (rc=$merge_outcome_rc)"
+            triage_log "PR $out outcome for $id could not be recorded (rc=$merge_outcome_rc)"
             exit 1
           fi
           if [ -n "$merge_authority_record_identity" ] \
@@ -2068,11 +2091,11 @@ while :; do
             triage_log "published merge outcome for $id but could not retire its authority record"
             exit 1
           fi
-          retire_merged_pr_poll "$id"
+          retire_terminal_pr_poll "$id" "$out"
           pr_poll_control_release || exit 1
           touch "$STATE/.last-check"
           if [ "$FM_MERGE_OUTCOME_ALREADY_RECORDED" = true ]; then
-            triage_log "absorbed duplicate merged PR poll result for $id"
+            triage_log "absorbed duplicate $out PR poll result for $id"
             continue
           fi
           wake "$reason"

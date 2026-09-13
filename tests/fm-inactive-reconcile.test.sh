@@ -4,6 +4,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-done-claim-lib.sh"
 
 RECON="$ROOT/bin/fm-inactive-reconcile.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
@@ -176,7 +178,7 @@ test_local_secondmate_delivers_terminal_ledger_line() {
   write_child "$MATE" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
   FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
   key=$(reported_outcome_key "$MATE" child 'done') || fail "ledger receipt did not retain its collision-resistant key"
-  expected="done [key=$key]: child child done: PR https://example.test/owner/repo/pull/1 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off"
+  expected="blocked [key=$key]: child child done: PR https://example.test/owner/repo/pull/1 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off claim=unverified"
   grep -Fxq "$expected" "$MAIN/state/mate.status" \
     || fail "secondmate did not deliver the child's ledger line on a plain poll: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
   [ "$(outcome_count "$MATE" reported)" = 1 ] || fail "ledger delivery receipt was not durable"
@@ -188,6 +190,163 @@ test_local_secondmate_delivers_terminal_ledger_line() {
     || fail "the inactive path reported a child the ledger delivery already owned"
   [ "$(outcome_count "$MATE" reported)" = 1 ] || fail "the inactive path minted a second receipt"
   pass "secondmate delivers a child's terminal ledger line once, on the next poll, from the ledger alone"
+}
+
+# The parent's durable supervision record must never say a child is done on the
+# child's own assertion. The ledger path is the delivering path in a secondmate
+# home, so it applies the same rule report_to_parent does: a terminal claim
+# nothing has established reaches the parent as a blocker naming the claim
+# state, and the same claim with a matching verified verdict reaches it as done.
+test_ledger_delivery_downgrades_an_unestablished_claim() {
+  local claim hash key
+  claim='done: pr=https://example.test/owner/repo/pull/1 head=00112233445566778899aabbccddeeff00112233 - shipped'
+
+  make_world ledger-unverified; bind_secondmate local
+  write_child "$MATE" child "$claim"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  key=$(reported_outcome_key "$MATE" child 'done') || fail "ledger receipt did not retain its key"
+  grep -q "^blocked \[key=$key\]: child child done: " "$MAIN/state/mate.status" \
+    || fail "an unestablished claim did not reach the parent as a blocker: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  grep -q "^done \[key=$key\]" "$MAIN/state/mate.status" \
+    && fail "an unestablished claim reached the parent's record as done"
+  grep -Fq 'claim=unverified' "$MAIN/state/mate.status" \
+    || fail "the downgraded line did not name the claim state"
+
+  make_world ledger-verified; bind_secondmate local
+  write_child "$MATE" child "$claim"
+  hash=$(fm_done_claim_hash "$claim") || fail "could not compute the claim identity"
+  printf 'fm-done-verdict-v1\nverified\n%s\n%s\nPR at the claimed head\n' \
+    "$hash" "$(date +%s)" > "$MATE/state/child.done-verdict"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  key=$(reported_outcome_key "$MATE" child 'done') || fail "established ledger receipt key missing"
+  grep -q "^done \[key=$key\]: child child done: " "$MAIN/state/mate.status" \
+    || fail "an established claim was not delivered as done: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  grep -Fq 'claim=' "$MAIN/state/mate.status" \
+    && fail "an established claim was annotated as if it were not"
+
+  pass "ledger delivery publishes an unestablished done claim as a blocker and an established one as done"
+}
+
+# A report about an UNSETTLED state must never be retired as though it were
+# settled. A claim published upward as unverified is corrected when the verifier
+# later establishes it, because the verdict is part of the event's identity and
+# not only of its wording - while a verdict that has not moved is still the same
+# event and stays deduplicated.
+test_a_later_established_claim_corrects_the_parents_record() {
+  local claim hash
+  claim='done: pr=https://example.test/owner/repo/pull/1 head=00112233445566778899aabbccddeeff00112233 - shipped'
+  make_world ledger-corrects; bind_secondmate local
+  write_child "$MATE" child "$claim"
+
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  grep -q '^blocked \[key=child-outcome-child-done-' "$MAIN/state/mate.status" \
+    || fail "an unestablished claim did not reach the parent as a blocker: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  [ "$(grep -c 'child-outcome-child-done-' "$MAIN/state/mate.status")" = 1 ] \
+    || fail "an unchanged verdict was reported twice"
+
+  hash=$(fm_done_claim_hash "$claim") || fail "could not compute the claim identity"
+  printf 'fm-done-verdict-v1\nverified\n%s\n%s\nPR at the claimed head\n' \
+    "$hash" "$(date +%s)" > "$MATE/state/child.done-verdict"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  grep -q '^done \[key=child-outcome-child-done-' "$MAIN/state/mate.status" \
+    || fail "an established claim never corrected the parent's blocked record: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  [ "$(grep -c '^done \[key=child-outcome-child-done-' "$MAIN/state/mate.status")" = 1 ] \
+    || fail "the corrected line was republished on a later poll"
+  pass "a claim established after it was reported unverified corrects the parent's record once"
+}
+
+# Both upward delivery paths must agree with the rest of the fleet about what a
+# terminal outcome is. A routed phase closing with `done [key=<slug>]` - the
+# shape bin/fm-brief.sh instructs - is one sub-event finishing, so it must not be
+# delivered upward as the child's completion by the ledger path, and it must not
+# make the crew-state backstop stand down as though the outcome were already
+# owned. The unkeyed control keeps both halves honest.
+test_a_keyed_phase_close_is_not_the_childs_terminal_outcome() {
+  make_world keyed-ledger; bind_secondmate local
+  write_child "$MATE" child 'done [key=docs]: that routed phase landed'
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  ! grep -q 'child-outcome-child-' "$MAIN/state/mate.status" 2>/dev/null \
+    || fail "a closed routed phase was delivered upward as the child's outcome: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+
+  # The backstop must still see this child, because the ledger path does not own
+  # an outcome the child never stated.
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE" --startup
+  grep -q 'inactive-outcome-' "$MAIN/state/mate.status" \
+    || fail "the crew-state backstop stood down for a child whose ledger states no outcome: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+
+  make_world unkeyed-ledger; bind_secondmate local
+  write_child "$MATE" child 'failed: the work did not land'
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  grep -q '^failed \[key=child-outcome-child-failed-' "$MAIN/state/mate.status" \
+    || fail "the child's own terminal line was not delivered upward: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  pass "a closed routed phase is neither delivered as the child's outcome nor allowed to silence the backstop"
+}
+
+# The pre-validation handoff has a backstop too. A stopped child that has handed
+# off for validation is waiting on a supervisor action nobody has taken, which is
+# what this backstop exists to catch; the same handoff reached it as a
+# pre-validation `done:` before it had a verb of its own, and giving it one must
+# not quietly remove the safety net behind it.
+test_a_stopped_ready_child_reaches_the_backstop() {
+  make_world ready-backstop; bind_secondmate local
+  write_child "$MATE" child 'ready: implementation complete and committed'
+  FM_FAKE_CREW_STATE='ready' run_reconcile "$MATE" --startup
+  grep -q 'inactive-outcome-' "$MAIN/state/mate.status" \
+    || fail "a stopped child waiting for validation was never reported upward: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  pass "a stopped child that handed off for validation still reaches the backstop"
+}
+
+# What the backstop SAYS about a handoff has to be what it observed. `ready` is
+# defined as pre-terminal, so a line calling it a terminal outcome would be the
+# false narration this change has corrected repeatedly - and a genuinely terminal
+# child must keep being described as one, so the wording is not merely softened
+# everywhere.
+test_a_handoff_report_is_not_narrated_as_terminal() {
+  local line
+  make_world handoff-narration; bind_secondmate local
+  write_child "$MATE" child 'working: still implementing'
+  FM_FAKE_CREW_STATE='ready' run_reconcile "$MATE" --startup
+  line=$(grep 'inactive-outcome-' "$MAIN/state/mate.status" 2>/dev/null | tail -1)
+  [ -n "$line" ] || fail "the handoff was never reported upward: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  case "$line" in
+    *"waiting on firstmate"*) ;;
+    *) fail "the handoff report did not say what was observed: $line" ;;
+  esac
+  case "$line" in
+    *terminal*) fail "the handoff was narrated as a terminal outcome: $line" ;;
+  esac
+
+  make_world terminal-narration; bind_secondmate local
+  write_child "$MATE" child 'working: still implementing'
+  FM_FAKE_CREW_STATE='failed' run_reconcile "$MATE" --startup
+  line=$(grep 'inactive-outcome-' "$MAIN/state/mate.status" 2>/dev/null | tail -1)
+  [ -n "$line" ] || fail "the terminal outcome was never reported upward: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  case "$line" in
+    *terminal*) ;;
+    *) fail "a genuinely terminal child stopped being described as terminal: $line" ;;
+  esac
+  pass "a handoff report says what was observed while a terminal outcome still reads as terminal"
+}
+
+# The captain presentation carries the same distinction, on the main-home path.
+test_a_handoff_presentation_is_not_narrated_as_terminal() {
+  local payload
+  make_world handoff-presentation
+  write_child "$MAIN" child 'working: still implementing'
+  FM_FAKE_CREW_STATE='ready' run_reconcile "$MAIN" --startup
+  payload=$(grep -o 'inactive [^|]*' "$MAIN/state/.wake-queue" 2>/dev/null | tail -1)
+  [ -n "$payload" ] || fail "the handoff was never queued for presentation: $(cat "$MAIN/state/.wake-queue" 2>/dev/null)"
+  case "$payload" in
+    *"waiting on firstmate"*) ;;
+    *) fail "the queued handoff did not say what was observed: $payload" ;;
+  esac
+  case "$payload" in
+    *terminal*) fail "the queued handoff was narrated as a terminal outcome: $payload" ;;
+  esac
+  pass "a queued handoff presentation says what was observed rather than calling it terminal"
 }
 
 # A busy child cannot keep later ledger outcomes from being visited, and is
@@ -240,16 +399,16 @@ test_secondmate_ledger_delivery_carries_report_and_failure() {
   scout_key=$(reported_outcome_key "$MATE" scout 'done') || fail "scout receipt key missing"
   boom_key=$(reported_outcome_key "$MATE" boom failed) || fail "failed receipt key missing"
   replaced_key=$(reported_outcome_key "$MATE" replaced-pr 'done') || fail "replacement PR receipt key missing"
-  grep -Fxq "done [key=$scout_key]: child scout done: report written pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off report=data/scout/report.md" \
+  grep -Fxq "blocked [key=$scout_key]: child scout done: report written pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off report=data/scout/report.md claim=unverified" \
     "$MAIN/state/mate.status" || fail "scout delivery lost its report pointer: $(cat "$MAIN/state/mate.status")"
   grep -Fxq "failed [key=$boom_key]: child boom failed: build broke pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off" \
     "$MAIN/state/mate.status" || fail "failed line was not delivered under the failed verb: $(cat "$MAIN/state/mate.status")"
-  grep -Fxq "done [key=$replaced_key]: child replaced-pr done: PR https://example.test/owner/repo/pull/22 pr=https://example.test/owner/repo/pull/22 mode=no-mistakes yolo=off" \
-    "$MAIN/state/mate.status" || fail "ledger fallback did not prefer the terminal ready line PR: $(cat "$MAIN/state/mate.status")"
+  grep -Fxq "blocked [key=$replaced_key]: child replaced-pr done: PR https://example.test/owner/repo/pull/22 pr=https://example.test/owner/repo/pull/22 mode=no-mistakes yolo=off claim=unverified" \
+    "$MAIN/state/mate.status" || fail "ledger fallback did not prefer the terminal line PR: $(cat "$MAIN/state/mate.status")"
   printf 'working: retrying\ndone: fixed on retry\n' >> "$MATE/state/boom.status"
   FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
   boom_key=$(reported_outcome_key "$MATE" boom 'done') || fail "recovered receipt key missing"
-  grep -Fq "done [key=$boom_key]: child boom done: fixed on retry" "$MAIN/state/mate.status" \
+  grep -Fq "blocked [key=$boom_key]: child boom done: fixed on retry" "$MAIN/state/mate.status" \
     || fail "a new terminal line after recovery was not delivered"
   [ "$(grep -c 'child-outcome-boom-' "$MAIN/state/mate.status")" = 2 ] \
     || fail "recovery delivered the wrong number of lines: $(cat "$MAIN/state/mate.status")"
@@ -276,13 +435,13 @@ test_pr_field_requires_recorded_pr_or_ready_signal_line() {
   prose_key=$(reported_outcome_key "$MATE" prose 'done') || fail "prose receipt key missing"
   ready_key=$(reported_outcome_key "$MATE" ready 'done') || fail "ready receipt key missing"
   scout_key=$(reported_outcome_key "$MATE" lookout 'done') || fail "scout receipt key missing"
-  grep -Fxq "done [key=$prose_key]: child prose done: cleanup finished mode=no-mistakes yolo=off" \
+  grep -Fxq "blocked [key=$prose_key]: child prose done: cleanup finished mode=no-mistakes yolo=off claim=unverified" \
     "$MAIN/state/mate.status" \
     || fail "a PR mentioned only in prose was claimed as the delivery: $(cat "$MAIN/state/mate.status")"
-  grep -Fxq "done [key=$ready_key]: child ready done: PR https://example.test/owner/repo/pull/44 checks green pr=https://example.test/owner/repo/pull/44 mode=no-mistakes yolo=off" \
+  grep -Fxq "blocked [key=$ready_key]: child ready done: PR https://example.test/owner/repo/pull/44 checks green pr=https://example.test/owner/repo/pull/44 mode=no-mistakes yolo=off claim=unverified" \
     "$MAIN/state/mate.status" \
     || fail "a ready-signal terminal line did not carry its PR: $(cat "$MAIN/state/mate.status")"
-  grep -Fxq "done [key=$scout_key]: child lookout done: PR https://example.test/owner/repo/pull/55 mode=no-mistakes yolo=off" \
+  grep -Fxq "blocked [key=$scout_key]: child lookout done: PR https://example.test/owner/repo/pull/55 mode=no-mistakes yolo=off claim=unverified" \
     "$MAIN/state/mate.status" \
     || fail "a scout's ready-looking line carried a PR claim: $(cat "$MAIN/state/mate.status")"
   pass "pr= requires the recorded PR or a ready-signal terminal line, and never a scout"
@@ -382,7 +541,7 @@ test_secondmate_partial_ledger_line_waits_for_newline() {
   printf 'ten\n' >> "$MATE/state/child.status"
   FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
   key=$(reported_outcome_key "$MATE" child 'done') || fail "completed ledger receipt key missing"
-  grep -Fq "done [key=$key]: child child done: half written" "$MAIN/state/mate.status" \
+  grep -Fq "blocked [key=$key]: child child done: half written" "$MAIN/state/mate.status" \
     || fail "the completed line was not delivered once its newline landed"
   pass "a ledger line still being appended waits for its newline"
 }
@@ -407,7 +566,7 @@ test_report_subcommand_delivers_and_refuses() {
   write_child "$MATE" child 'done: final word'
   run_report "$MATE" child || fail "report refused a deliverable ledger line"
   key=$(reported_outcome_key "$MATE" child 'done') || fail "report receipt key missing"
-  grep -Fq "done [key=$key]: child child done: final word" "$MAIN/state/mate.status" \
+  grep -Fq "blocked [key=$key]: child child done: final word" "$MAIN/state/mate.status" \
     || fail "report did not deliver the child's final line"
   run_report "$MATE" child || fail "report did not treat an already delivered line as owed nothing"
   write_child "$MATE" quiet 'working: nothing terminal'
@@ -701,7 +860,7 @@ test_watcher_poll_delivers_child_ledger_line_to_parent() {
   done
   reap "$pid"
   key=$(reported_outcome_key "$MATE" child 'done') || fail "watcher ledger receipt key missing"
-  grep -Fxq "done [key=$key]: child child done: PR https://example.test/owner/repo/pull/1 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off" \
+  grep -Fxq "blocked [key=$key]: child child done: PR https://example.test/owner/repo/pull/1 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off claim=unverified" \
     "$MAIN/state/mate.status" \
     || fail "the watcher poll did not deliver the child's ledger line to the parent: $(cat "$MAIN/state/mate.status" 2>/dev/null; cat "$WORLD/mate-watch.out")"
   [ ! -s "$WORLD/forge.log" ] || fail "ledger delivery invoked a forge command"
@@ -820,6 +979,12 @@ test_reconciliation_never_calls_forge() {
 
 test_main_direct_terminal_presentation_receipt
 test_local_secondmate_delivers_terminal_ledger_line
+test_ledger_delivery_downgrades_an_unestablished_claim
+test_a_later_established_claim_corrects_the_parents_record
+test_a_keyed_phase_close_is_not_the_childs_terminal_outcome
+test_a_stopped_ready_child_reaches_the_backstop
+test_a_handoff_report_is_not_narrated_as_terminal
+test_a_handoff_presentation_is_not_narrated_as_terminal
 test_busy_child_does_not_starve_later_ledger_outcomes
 test_secondmate_ledger_delivery_carries_report_and_failure
 test_pr_field_requires_recorded_pr_or_ready_signal_line

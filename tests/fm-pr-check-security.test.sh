@@ -146,6 +146,16 @@ case "${1:-} ${2:-}" in
     ;;
   "pr view")
     case " $* " in
+      # The claim verifier asks for exactly these five fields with its own tab
+      # template, so it must be answered in that shape and BEFORE the generic
+      # rollup arm below - both are `gh pr view`, and the first match wins.
+      *"state,headRefOid,headRefName,url,statusCheckRollup"*)
+        [ "${FM_TEST_GH_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GH_SLEEP"
+        printf '%s\t%s\t%s\t%s\n' "${FM_TEST_GH_STATE:-OPEN}" \
+          "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" \
+          "${FM_TEST_GH_HEAD_BRANCH:-fm/task-a}" SUCCESS
+        exit 0
+        ;;
       *statusCheckRollup*)
         printf '%s\n' "{\"state\":\"OPEN\",\"isDraft\":false,\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"headRefOid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"baseRefName\":\"main\",\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"name\":\"ci\",\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"}]}"
         exit 0
@@ -640,6 +650,79 @@ run_watcher_bounded() {
       FM_POLL=0.02 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 PATH="$fakebin:$BASE_PATH" "$WATCH" "$@"
 }
 
+# Registration is the one routine path that already consults the forge right
+# after a worker claims done, so it is where verification is armed. Without it
+# `done-unverified` would be every finished task's steady state between claim
+# and cleanup - a signal that is always on, which nobody reacts to. It is
+# advisory: no verifier outcome, including there being nothing to verify, may
+# change what this script registers, arms, or exits with.
+test_registration_arms_claim_verification_without_blocking() {
+  local dir head url other started elapsed
+  url=https://github.com/o/r/pull/9
+  head=0123456789abcdef0123456789abcdef01234567
+  other=89abcdef0123456789abcdef0123456789abcdef
+
+  dir=$(make_case verify-armed)
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR"
+  printf 'done: pr=%s head=%s - shipped\n' "$url" "$head" > "$dir/home/state/task-a.status"
+  FM_TEST_GH_HEAD=$head run_check_entry "$dir" task-a "$url" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "registration failed for a task with a conforming claim: $(cat "$dir/stderr")"
+  fm_pr_poll_artifacts_valid "$dir/home/state" task-a "$POLL" \
+    || fail "registration did not arm the poll for a task with a conforming claim"
+  assert_present "$dir/home/state/task-a.done-verdict" "registration left no durable verdict record"
+  assert_grep verified "$dir/home/state/task-a.done-verdict" "the durable record did not establish the claim"
+  assert_grep 'claim: verified' "$dir/stdout" "registration did not report the verdict it established"
+  assert_grep "armed: state/task-a.check.sh" "$dir/stdout" "registration stopped reporting what it armed"
+
+  # A claim the forge establishes as FALSE must not stop the registration: the
+  # PR is still registered and the poll is still armed, and only the record and
+  # the printed line carry the contradiction.
+  dir=$(make_case verify-contradicted)
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR"
+  printf 'done: pr=%s head=%s - shipped\n' "$url" "$other" > "$dir/home/state/task-a.status"
+  FM_TEST_GH_HEAD=$head run_check_entry "$dir" task-a "$url" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a contradicted claim changed the registration's exit status: $(cat "$dir/stderr")"
+  fm_pr_poll_artifacts_valid "$dir/home/state" task-a "$POLL" \
+    || fail "a contradicted claim stopped the poll from being armed"
+  assert_grep contradicted "$dir/home/state/task-a.done-verdict" "the contradiction was not recorded durably"
+  assert_grep 'claim: contradicted' "$dir/stdout" "registration did not report the contradiction"
+
+  # The ordinary case at registration time: the worker has not claimed done yet.
+  # Nothing to verify is not an error and prints nothing.
+  dir=$(make_case verify-no-claim)
+  write_task_meta "$dir"
+  FM_TEST_GH_HEAD=$head run_check_entry "$dir" task-a "$url" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a task with no terminal claim failed registration: $(cat "$dir/stderr")"
+  fm_pr_poll_artifacts_valid "$dir/home/state" task-a "$POLL" \
+    || fail "a task with no terminal claim did not get its poll armed"
+  assert_absent "$dir/home/state/task-a.done-verdict" "a task with no claim was given a verdict record"
+  assert_no_grep 'claim:' "$dir/stdout" "a task with no claim printed a verdict line"
+
+  # The arming is advisory in LATENCY too: this is a human-facing entrypoint
+  # that used to return the moment the poll was armed, and the verifier consults
+  # the forge behind its own bounds. A verifier that runs long is abandoned, and
+  # the registration it cannot affect is already complete.
+  dir=$(make_case verify-slow)
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "worktree=$dir/wt" "kind=ship" "mode=direct-PR"
+  printf 'done: pr=%s head=%s - shipped\n' "$url" "$head" > "$dir/home/state/task-a.status"
+  started=$(date +%s)
+  FM_TEST_GH_HEAD=$head FM_TEST_GH_SLEEP=20 FM_PR_CHECK_VERIFY_TIMEOUT=2 \
+    run_check_entry "$dir" task-a "$url" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a slow verifier changed the registration's exit status: $(cat "$dir/stderr")"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -lt 15 ] \
+    || fail "registration waited ${elapsed}s on its advisory verification instead of bounding it"
+  fm_pr_poll_artifacts_valid "$dir/home/state" task-a "$POLL" \
+    || fail "a slow verifier stopped the poll from being armed"
+  assert_grep "armed: state/task-a.check.sh" "$dir/stdout" \
+    "a slow verifier stopped the registration reporting what it armed"
+
+  pass "PR registration arms claim verification without ever blocking it"
+}
+
 test_rejected_metacharacter_bytes_are_inert() {
   local dir family rc before after
   dir=$(make_case rejected-metacharacters)
@@ -705,15 +788,22 @@ test_static_poll_contract() {
   dir=$(make_case poll-contract)
   make_poll_fixture "$dir"
 
-  for state in OPEN CLOSED EMPTY MALFORMED; do
+  # The poll reports the two TERMINAL states and nothing else. A CLOSED pull
+  # request is reported because it contradicts a task record that already claims
+  # done; every unreadable or unrecognised answer stays silent, so neither
+  # outcome can be inferred from a failed lookup.
+  for state in OPEN EMPTY MALFORMED; do
     case "$state" in
       EMPTY) value= ;;
       MALFORMED) value='not-a-state' ;;
       *) value=$state ;;
     esac
     out=$(FM_TEST_GH_STATE="$value" run_poll "$dir")
-    [ -z "$out" ] || fail "static poll emitted for non-merged state"
+    [ -z "$out" ] || fail "static poll emitted for a non-terminal state"
   done
+  out=$(FM_TEST_GH_STATE=CLOSED run_poll "$dir")
+  [ "$out" = closed-unmerged ] \
+    || fail "static poll did not report a pull request closed without merging"
   out=$(FM_TEST_GH_STATE=MERGED run_poll "$dir")
   [ "$out" = merged ] || fail "static poll did not emit exactly one merged line"
   out=$(FM_TEST_GH_FAIL=1 run_poll "$dir")
@@ -1320,12 +1410,17 @@ gitlab.example
 group/subgroup/project
 7" ] || fail "published GitLab sidecar bytes were not exact"
 
-  # Only an exact merged state wakes firstmate. Every other reading, including
-  # an unreadable merge request and a changed output format, stays silent.
-  for value in opened closed locked '' not-a-state MERGED merged-but-not; do
+  # Only the two exact terminal states wake firstmate. Every other reading,
+  # including an unreadable merge request and a changed output format, stays
+  # silent - "closed" must match exactly, so neither "locked" nor a case variant
+  # can be read as a merge request that was abandoned.
+  for value in opened locked '' not-a-state MERGED CLOSED closed-ish merged-but-not; do
     out=$(FM_TEST_GLAB_STATE="$value" run_poll "$dir")
-    [ -z "$out" ] || fail "GitLab poll emitted for a non-merged state"
+    [ -z "$out" ] || fail "GitLab poll emitted for a non-terminal state: $value"
   done
+  out=$(FM_TEST_GLAB_STATE=closed run_poll "$dir")
+  [ "$out" = closed-unmerged ] \
+    || fail "GitLab poll did not report a merge request closed without merging"
   out=$(FM_TEST_GLAB_STATE=merged run_poll "$dir")
   [ "$out" = merged ] || fail "GitLab poll did not emit exactly one merged line"
   out=$(FM_TEST_GLAB_FAIL=1 run_poll "$dir")
@@ -1493,6 +1588,56 @@ test_merged_poll_retires_once() {
   ! grep "$(printf '\tcheck\ttask-a.check.sh\t')" "$state/.wake-queue" >/dev/null 2>&1 \
     || fail "handled merged notification remained queued after acknowledgement"
   pass "validated merged polls notify once and retire before the next watcher cycle"
+}
+
+# A poll exists to observe a terminal outcome, so a close without merge retires
+# on exactly the same condition a merge does: the outcome having been recorded.
+# The case that matters is a close with NO standing claim, which is ordinary -
+# the poll is armed at PR registration, long before any worker claims anything -
+# and which writes no verdict at all. Gating retirement on a verdict left that
+# poll asking the forge once per watcher interval forever.
+test_closed_unmerged_poll_retires_without_a_claim_to_contradict() {
+  local dir state rc first second
+  dir=$(make_case closed-unmerged-retirement)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  # The worker is still working: it has asserted nothing for the close to
+  # contradict, so no verdict is written for this outcome.
+  printf 'working: still going\n' > "$state/task-a.status"
+
+  set +e
+  FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" \
+    > "$dir/watch-1.out" 2> "$dir/watch-1.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "closed-unmerged retirement watcher failed: $(cat "$dir/watch-1.err")"
+  first=$(cat "$dir/watch-1.out")
+  case "$first" in
+    check:*task-a.check.sh:*closed-unmerged) ;;
+    *) fail "the close notification was not preserved: $first" ;;
+  esac
+  [ ! -e "$state/task-a.done-verdict" ] \
+    || fail "a close with no claim on record invented a verdict"
+  ack_watcher_cycle "$state" || fail "close notification handling acknowledgement failed"
+  assert_poll_absent "$state" task-a
+
+  rm -f "$state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" \
+    > "$dir/watch-2.out" 2> "$dir/watch-2.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "second watcher cycle failed: $(cat "$dir/watch-2.err")"
+  second=$(cat "$dir/watch-2.out")
+  case "$second" in
+    check:*z-stop.check.sh:*stop-cycle) ;;
+    *) fail "second cycle did not reach the control check: $second" ;;
+  esac
+  ! grep -F 'task-a.check.sh: closed-unmerged' "$dir/watch-2.out" >/dev/null \
+    || fail "a retired closed-unmerged poll asked the forge again"
+  pass "a closed-unmerged poll retires even when it had no claim to contradict"
 }
 
 # A poll's own retirement state is scoped to ONE registration, so it cannot by
@@ -1944,15 +2089,12 @@ test_external_merge_transition_retires_only_terminal_poll() {
   add_stop_custom_check "$dir"
   before=$(poll_artifact_snapshot "$state" task-a)
 
-  for label in open-green open-red closed-unmerged forge-error malformed; do
+  for label in open-green open-red forge-error malformed; do
     rm -f "$state/.last-check"
     set +e
     case "$label" in
       open-green|open-red)
         FM_TEST_GH_STATE=OPEN run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/$label.out" 2> "$dir/$label.err"
-        ;;
-      closed-unmerged)
-        FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/$label.out" 2> "$dir/$label.err"
         ;;
       forge-error)
         FM_TEST_GH_FAIL=1 run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/$label.out" 2> "$dir/$label.err"
@@ -1969,15 +2111,45 @@ test_external_merge_transition_retires_only_terminal_poll() {
     ack_watcher_cycle "$state" || fail "$label control wake acknowledgement failed"
   done
 
-  rm -f "$state/z-stop.check.sh" "$state/z-stop.check-trust" "$state/.last-check"
+  # A pull request CLOSED without merging is not silence: it contradicts a task
+  # record that already claims done, so it wakes. It is terminal for the poll
+  # too - the outcome is on the record, and a poll has nothing left to observe
+  # once that is true - so the poll retires exactly as a merge retires it. A
+  # reopen that goes on to merge is reported through a poll re-armed at
+  # re-registration, which the last leg of this case exercises.
+  rm -f "$state/.last-check"
   set +e
-  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/merged.out" 2> "$dir/merged.err"
+  FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" \
+    > "$dir/closed-unmerged.out" 2> "$dir/closed-unmerged.err"
   rc=$?
   set -e
-  [ "$rc" -eq 0 ] || fail "external merged transition failed: $(cat "$dir/merged.err")"
-  case "$(cat "$dir/merged.out")" in check:*task-a.check.sh:*merged) ;; *) fail "external merge did not preserve its notification" ;; esac
+  [ "$rc" -eq 0 ] || fail "closed-unmerged watcher cycle failed: $(cat "$dir/closed-unmerged.err")"
+  case "$(cat "$dir/closed-unmerged.out")" in
+    check:*task-a.check.sh:*closed-unmerged) ;;
+    *) fail "a pull request closed without merging did not wake: $(cat "$dir/closed-unmerged.out")" ;;
+  esac
+  ack_watcher_cycle "$state" || fail "closed-unmerged wake acknowledgement failed"
   assert_poll_absent "$state" task-a
-  pass "open/red, closed-unmerged, malformed, and forge errors remain armed until an exact merged transition"
+
+  rm -f "$state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" \
+    > "$dir/closed-again.out" 2> "$dir/closed-again.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "second closed-unmerged cycle failed: $(cat "$dir/closed-again.err")"
+  case "$(cat "$dir/closed-again.out")" in
+    check:*z-stop.check.sh:*stop-cycle) ;;
+    *) fail "the same close was reported twice: $(cat "$dir/closed-again.out")" ;;
+  esac
+  ack_watcher_cycle "$state" || fail "second closed-unmerged control wake acknowledgement failed"
+
+  # A later merge of the same PR is reported through a poll re-armed at
+  # re-registration, and the notification marker records WHICH outcome was
+  # delivered so the close cannot suppress it. That handover is pinned on the
+  # marker's own surface by test_marker_distinguishes_the_two_terminal_outcomes
+  # in tests/fm-done-verified.test.sh, which is where the marker contract lives.
+  pass "open/red, malformed, and forge errors stay silent, and a close wakes once and retires its poll"
 }
 
 test_retirement_refuses_replacement_and_nonterminal_results() {
@@ -2002,6 +2174,23 @@ test_retirement_refuses_replacement_and_nonterminal_results() {
       && fail "nonterminal result '$result' received retirement authority"
   done
   [ "$(state_snapshot "$state")" = "$before" ] || fail "nonterminal result changed canonical artifacts"
+
+  # A close without merge is terminal too: once its contradiction is recorded the
+  # poll has nothing left to observe, so it retires on the same receipt the merge
+  # path uses, carrying the outcome that actually retired it.
+  dir=$(make_case retirement-closed-unmerged)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/7
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/7
+  fm_pr_poll_snapshot_capture "$state" task-a "$POLL" || fail "could not snapshot close fixture"
+  fm_pr_poll_retirement_publish "$state" task-a "$POLL" closed-unmerged \
+    || fail "a recorded close could not retire its own poll"
+  fm_pr_poll_retirement_parse "$state/task-a.pr-poll-retirement" \
+    || fail "the close retirement receipt did not parse"
+  fm_pr_poll_retirement_recover_one "$state" task-a "$POLL" \
+    || fail "the close retirement receipt was not recoverable"
+  [ ! -e "$state/task-a.check.sh" ] \
+    || fail "the close retirement left the poll's runnable check armed"
 
   printf '# tamper\n' >> "$state/task-a.check.sh"
   before=$(state_snapshot "$state")
@@ -2418,8 +2607,10 @@ SH
 }
 
 test_parser_matrix
+test_registration_arms_claim_verification_without_blocking
 test_gitlab_merge_watch
 test_merged_poll_retires_once
+test_closed_unmerged_poll_retires_without_a_claim_to_contradict
 test_merged_poll_reregistration_after_notification_is_absorbed
 test_merged_poll_retries_a_failed_upward_report
 test_self_merge_and_poll_publish_one_outcome

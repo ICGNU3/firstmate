@@ -114,7 +114,8 @@ state/               runtime records and signals; gitignored
   <id>.pr-poll-registration  private transactional provenance record binding the task, canonical metadata identity, sidecar, and static poll publication
   <id>.pr-poll-retirement  private identity-bound crash-recovery receipt for one exact validated merged result; removed after its poll artifacts retire
   <id>.merge-authority  private canonical-PR-bound authority persisted after firstmate's forge merge request is accepted and consumed by a later merged poll; bin/fm-merge-authority-lib.sh owns its format and lifecycle
-  <id>.pr-poll-merge-notified  canonical PR identity of the last merge outcome delivered for this task; bin/fm-pr-lib.sh owns the marker format and identity mechanics, while bin/fm-merge-outcome-lib.sh owns locked publication, duplicate suppression, and replacement
+  <id>.pr-poll-merge-notified  canonical PR identity and which terminal outcome was last delivered for this task; bin/fm-pr-lib.sh owns the marker format and identity mechanics, while bin/fm-merge-outcome-lib.sh owns locked publication, duplicate suppression, and replacement
+  <id>.done-verdict  what bin/fm-verify-done.sh established about this task's terminal claim, bound to the exact claim it judged; bin/fm-done-claim-lib.sh owns the format, and a new claim supersedes rather than inherits it
   branch-outcomes.jsonl .branch-outcomes-cursor .branch-outcomes-processed .<task>.branch-outcome-index .branch-outcome-index-ready  Pi supervision-branch durable outcome store, its read cursor, main's processed marker, bounded latest per-task status-coverage caches, and their recovery marker; bin/fm-branch-outcome.sh owns the formats
   branch-session/ .branch-session .branch-mirror-cursor  the branch's per-main-session conversations, the pointer to the current one, and the dialog-mirror cursor; extension-owned (docs/pi-supervision-branch.md)
   .branch-eligible-rows .branch-eligible-owner .main-eligible-rows  per-actor wake-row claims and branch-owner evidence; docs/watcher-continuity.md owns the acknowledgement contract
@@ -187,11 +188,12 @@ When that section reports its checks still in progress it names exactly what is 
    Every locked drain also prints a bounded fleet-wide `OPEN DECISIONS` section when durable decision records remain open, including when the queue itself is empty; reconcile those entries before continuing.
    A main drain may also print a bounded, one-shot `STATUS OUTCOME BACKSTOP` when a task's newest captain-facing status event has no covering supervision-branch outcome; handle it as a recovered wake even when no queue row remains.
    The same drain prints every still-unread `note:` line and pending-reply resolution since the last presentation in an unbounded `UNREAD STATUS` section, so an answer buried under a later routine line is not dropped; those lines are not re-printed after that presentation.
+   That section also marks each still-unread line matching no status verb as `UNRECOGNISED` instead of absorbing it silently, bounded per task by `FM_DRAIN_UNRECOGNISED_MAX`; a trailing count names how many it held back, and those stay unread for the next drain rather than being lost, so read them in the task's status log when the count appears.
    It also prints a bounded `RECORD DIVERGENCE` section naming every captain call the status log reads as resolved while its backlog task is still held; nothing is closed for you, and `captain-hold-lifecycle` owns the reconciliation.
    When the lock could not be acquired and verified, the queue is left untouched because no session mutation is authorized, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
 4. **Supervision operating instructions** - after the wake queue and before both digests, the digest emits exactly one operating block for the detected primary harness, followed by the read-once contract that governs them.
    The script itself never starts supervision; the emitted harness protocol owns the exact wait or wake mechanism.
-5. **Fleet-state digest** - after that read-once contract and ahead of the context digest, the compact backlog listing owned by `bin/fm-session-start.sh`; every `state/<id>.meta`; a bounded tail of each task's `state/<id>.status` (labeled as wake-EVENT history, not current state, with the full log path printed for a deeper read); the away posture (`state/.afk-contract`, plus the `state/.afk` daemon flag where a daemon runs); and one cheap alive/dead read of each task's recorded backend endpoint.
+5. **Fleet-state digest** - after that read-once contract and ahead of the context digest, the compact backlog listing owned by `bin/fm-session-start.sh`; every `state/<id>.meta`; each task's standing terminal claim and what was last established about it, read locally from its status log and `state/<id>.done-verdict` and never re-verified here; a bounded tail of each task's `state/<id>.status` (labeled as wake-EVENT history, not current state, with the full log path printed for a deeper read); the away posture (`state/.afk-contract`, plus the `state/.afk` daemon flag where a daemon runs); and one cheap alive/dead read of each task's recorded backend endpoint.
    That liveness line is a fast presence check only, not a full state read - when you need a crew's actual current state (a run-step, not just "is the pane there"), read it with `bin/fm-crew-state.sh <id>` as before; the digest deliberately skips that deeper, slower read for every task so it stays fast and bounded.
 6. **Network checks** - after the fleet-state digest, the deferred stage's result, or an explicit statement of what it has not confirmed yet.
    A read-only session runs no network checks at all and says so.
@@ -383,15 +385,25 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 
 ### PR ready, landing, and teardown
 
-For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
-Run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from that ready signal - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
-Tell the captain the PR's full `https://...` URL copied from the worker's ready line or the task's `pr=` metadata, a concise outcome summary, and the no-mistakes risk level when applicable.
+A terminal `done:` claim names the exact commit, PR, branch, or report it is claiming, and only `bin/fm-verify-done.sh` decides whether that claim is true; `bin/fm-done-claim-lib.sh` owns the grammar and the durable verdict.
+A no-mistakes worker whose implementation is committed but not yet validated appends `ready: <summary>` instead, which is captain-relevant so firstmate sees the handoff, and is not terminal: it asserts nothing about a commit that has shipped, so it neither stands as a claim nor is verified as one.
+A claim that has not been established is never done: `bin/fm-crew-state.sh` reports it as `done-unverified`, and teardown refuses it.
+Terminal evidence about a claim has three shapes, not two, and the verdict record names all three: `unverified` is absence of evidence and never downgrades what already stands, `contradicted` is positive evidence of falsity and overwrites anything, and `stale` is the world having changed under a verdict that was true when it was made, which `bin/fm-merge-outcome-lib.sh` records when a PR merges under a claim already established as verified.
+A PR closed without merging is not stale but false, so the same owner records `contradicted` for it.
+A `stale` verdict is not established either: it reports as `done-unverified` and teardown re-runs `bin/fm-verify-done.sh` rather than passing on it.
+The way out of a claim that turned out to be false is to withdraw it, not to override the gate: a `failed:` line appended after a `done:` line retracts the claim, so the task has none to verify and cleanup is no longer held to it.
+Only `failed:` retracts; `blocked:` and `needs-decision:` say the work is ongoing and leave the claim standing, and teardown's landed-work gates apply either way.
+Only the task speaking for itself may change what claim stands, in either direction: a `done:` or `failed:` line carrying a correlation token or a routed `[key=...]` is a sub-event, so a closed routed phase or a reported child outcome can neither assert nor withdraw the task's own terminal claim.
+Run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from the terminal claim's `pr=` field or the task's `pr=` metadata, never assembled from memory - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's poll, which reports a merge and a close without merge alike.
+That registration also runs `bin/fm-verify-done.sh` for the task and prints its verdict, so a claim is established while the forge is already being consulted rather than only at cleanup; the verdict is advisory there and never changes what the registration records, arms, or exits with.
+Tell the captain the PR's full `https://...` URL, never a bare `#number`, whenever the claim's `pr=` field or the task's `pr=` metadata holds one, copied verbatim from that record and never assembled from memory; when neither holds one yet, report only the identifier you actually have.
+Tell them a concise outcome summary too, and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 Retire a custom check only through `bin/fm-check-unregister.sh <id>` (or `bin/fm-teardown.sh` for a spawned task); never hand-compose an `rm` with `$STATE`/`$ID`.
 
 Tear down a ship task only after landing is confirmed.
-A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
+A teardown refusal for uncommitted or unlanded work, or for a claim that is unverified or contradicted, is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
 

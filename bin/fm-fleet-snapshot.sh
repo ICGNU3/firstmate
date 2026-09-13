@@ -52,7 +52,10 @@
 #     but mutable current-state, status, report, and endpoint evidence is discarded
 #     rather than attributed to the replacement generation.
 #     Local current_state is parsed from bin/fm-crew-state.sh <id> and preserves
-#     state, source, detail, and raw line separately. Remote secondmate rows use
+#     state, source, detail, and raw line separately.
+#     `done-unverified` is that reader's token for a task whose terminal claim
+#     has not been established (bin/fm-verify-done.sh); it counts as terminal
+#     wherever a terminal state matters, and never as done. Remote secondmate rows use
 #     an explicit unknown value because their endpoint liveness belongs to
 #     supervision rather than this snapshot path.
 #     paths.status_log.last_event is historical wake-event data only, never
@@ -151,6 +154,39 @@ FM_SNAPSHOT_SECONDMATE_MAX_BYTES=${FM_SNAPSHOT_SECONDMATE_MAX_BYTES:-262144}
 FM_SNAPSHOT_SECONDMATE_CHILDREN=${FM_SNAPSHOT_SECONDMATE_CHILDREN:-20}
 FM_SNAPSHOT_SECONDMATE_QUEUED=${FM_SNAPSHOT_SECONDMATE_QUEUED:-20}
 FM_SNAPSHOT_SECONDMATE_DECISIONS=${FM_SNAPSHOT_SECONDMATE_DECISIONS:-20}
+
+# THE ONE OWNER of what each home-summary invalidity reason MEANS to the two
+# consumers that act on it. Both read this table rather than listing reasons
+# themselves, because the two lists drifted apart the moment one of them gained
+# an entry: a reason added to the state-`unknown` exemption and not to the
+# parent sampler's tolerance made a parent discard a whole home's ledger over
+# one flag.
+#
+#   parent_tolerates      - a parent sampling this home still SAMPLES it and
+#                           keeps its ledger (active_children, decisions_open,
+#                           holds, queued, landed, endpoints, counts). True for
+#                           data-completeness observations about individual
+#                           children, which say something is unaccounted for,
+#                           not that the home's structure is unreadable.
+#                           False for reasons that make the structure itself
+#                           untrustworthy, where a retained ledger would be a
+#                           record nothing supports.
+#   state_unknown_exempt  - the summary's own `state` is still computed from
+#                           the buckets rather than collapsing to `unknown`.
+#
+# A reason absent from this table is treated as neither tolerated nor exempt,
+# which is the conservative direction; add it here when you add it to the
+# emitter, and both consumers follow at once.
+FM_SNAPSHOT_INVALIDITY_POLICY='{
+  "missing_backlog":           {"parent_tolerates": false, "state_unknown_exempt": false},
+  "unstructured_current":      {"parent_tolerates": false, "state_unknown_exempt": false},
+  "child_current_unavailable": {"parent_tolerates": true,  "state_unknown_exempt": false},
+  "orphan_in_flight":          {"parent_tolerates": true,  "state_unknown_exempt": true},
+  "unowned_current":           {"parent_tolerates": true,  "state_unknown_exempt": true},
+  "terminal_in_flight":        {"parent_tolerates": true,  "state_unknown_exempt": true},
+  "unbucketed_current":        {"parent_tolerates": true,  "state_unknown_exempt": true}
+}'
+
 FM_SNAPSHOT_TERMINAL_LINES=${FM_SNAPSHOT_TERMINAL_LINES:-8}
 FM_SNAPSHOT_TERMINAL_BYTES=${FM_SNAPSHOT_TERMINAL_BYTES:-4096}
 FM_SNAPSHOT_TERMINAL_TIMEOUT=${FM_SNAPSHOT_TERMINAL_TIMEOUT:-2}
@@ -786,6 +822,10 @@ task_json_lines() {
     #   - a TERMINAL done/failed state on a single-owner task (scout or ship), whose
     #     deliverable is its report or PR, so a COMPLETED scout surfaces only as a
     #     report POINTER, never as a reopened pending decision.
+    # `done-unverified` clears alongside `done`: the crew TERMINATED either way,
+    # and whether its claim is true is a separate question this fold does not
+    # answer. Treating it as still-running would resurface every stale decision
+    # a finished task left behind.
     # Secondmates are excluded from lifecycle clearing: they are persistent and
     # multiplex many concerns onto one stream, so activity on one concern must
     # never clear another concern's keyed decision. A parked/blocked state, or a
@@ -795,7 +835,8 @@ task_json_lines() {
     if [ "$kind" != secondmate ] && \
        { { { [ "$current_source" = run-step ] || [ "$current_source" = pane ]; } \
            && [ "$current_state" != parked ] && [ "$current_state" != blocked ]; } \
-         || { [ "$current_state" = "done" ] || [ "$current_state" = "failed" ]; }; }; then
+         || { [ "$current_state" = "done" ] || [ "$current_state" = "done-unverified" ] \
+              || [ "$current_state" = "failed" ]; }; }; then
       open_decisions_tsv=""
     fi
     open_decisions_json=$(printf '%s' "$open_decisions_tsv" | jq -R -s '
@@ -951,6 +992,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
     --argjson decisions_n "$FM_SNAPSHOT_SECONDMATE_DECISIONS" \
     --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" \
     --slurpfile backlog "$1" \
+    --argjson invalidity_policy "$FM_SNAPSHOT_INVALIDITY_POLICY" \
     --slurpfile tasks "$2" "$FM_LANDED_JQ_DEFS"'
     ($backlog[0]) as $backlog
     | ($tasks[0]) as $tasks
@@ -1002,7 +1044,9 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
     | ([ $owned_in_flight[] as $work
          | $tasks[]
          | select(.kind != "secondmate")
-         | select(.id == $work.id and (.current_state.state == "done" or .current_state.state == "failed"))
+         | select(.id == $work.id and (.current_state.state == "done"
+                                       or .current_state.state == "done-unverified"
+                                       or .current_state.state == "failed"))
          | {id,state:.current_state.state} ]) as $terminal_in_flight
     | ([if $backlog.present != true then
           {kind:"missing_backlog",ids:[],reason:"missing structured backlog"}
@@ -1045,17 +1089,56 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
             reason:((.hold_reason // .blocked_reason // "blocked") | trunc(120)),source:"backlog"} ]
        + [ $owned_in_flight[] as $work
            | $tasks[]
-           | select(.id == $work.id and (.current_state.state == "parked" or .current_state.state == "paused" or .current_state.state == "blocked"))
+           | select(.id == $work.id and (.current_state.state == "parked" or .current_state.state == "paused" or .current_state.state == "blocked" or .current_state.state == "ready"))
            | select(($work.hold_reason != null and $work.hold_kind != null) | not)
            | {id,title:((.backlog.title // .id) | trunc(90)),blocked_by:null,
               blocked_by_ids:[],unresolved_blocker_ids:[],
               reason:((.current_state.detail // .current_state.state) | trunc(120)),source:"child-state"} ]) as $holds_all
+    # Rows the buckets above leave out ON PURPOSE, each by a rule stated here.
+    # A deliberate exclusion is ACCOUNTED FOR - somebody classified the row and
+    # decided it has no bucket - which is a different thing from a row nobody
+    # classified, and the guard below can only tell them apart if every such
+    # rule declares itself. Adding an exclusion to a bucket without adding it
+    # here turns it into a false fall-through, which is exactly how a
+    # program-role child came to be reported as an inconsistency that did not
+    # exist. Do not answer a fall-through by inventing a bucket instead: that
+    # hides the exclusion rather than stating it.
+    #   - a program-role in-flight row in the `working` state is outside
+    #     $active_all because a program is not active child work. The exclusion
+    #     is exactly as narrow as that reason: in any other state the row is
+    #     bucketed like any child, so the guard is not permanently blind to it
+    #     and the next state token added cannot be silently absorbed here;
+    #   - an in-flight row whose hold the backlog already reports is outside the
+    #     $holds_all child-state arm so one hold is not listed twice; the
+    #     backlog arm reports it.
+    | (([ $owned_in_flight[] as $work
+          | select($work.current_role == "program")
+          | $tasks[]
+          | select(.id == $work.id and .current_state.state == "working")
+          | .id ]
+        + [ $owned_in_flight[] | select(.hold_reason != null and .hold_kind != null) | .id ])
+       | unique) as $accounted_exclusions
+    | (([ $active_all[].id ] + [ $holds_all[].id ] + [ $terminal_in_flight[].id ]
+         + [ $unknown_children[].id ] + [ $unowned_children[].id ]
+         + $accounted_exclusions)
+       | unique) as $accounted_ids
+    | ([ $tasks[]
+         | select(.kind != "secondmate")
+         | select(.id as $id | $accounted_ids | index($id) | not)
+         | {id,state:.current_state.state} ]) as $unbucketed_current
+    | ($strict_invalidities
+       + (if ($unbucketed_current | length) > 0 then
+            [{kind:"unbucketed_current",ids:($unbucketed_current | map(.id)),
+              reason:("live child state is accounted for by nothing: " +
+                      ($unbucketed_current | map(.id + "=" + .state) | join(", ")))}]
+          else [] end)) as $strict_invalidities
     | ($backlog.present == true
        and ($unstructured_current | length) == 0
        and ($unknown_children | length) == 0
        and ($orphan_in_flight | length) == 0
        and ($unowned_children | length) == 0
-       and ($terminal_in_flight | length) == 0) as $valid
+       and ($terminal_in_flight | length) == 0
+       and ($unbucketed_current | length) == 0) as $valid
     | (if ($strict_invalidities | length) > 0 then $strict_invalidities[0].reason
        elif ($unknown_children | length) > 0 then
          "child current state unavailable: " + ($unknown_children | map(.id) | join(", "))
@@ -1065,8 +1148,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
        else {kind:null,ids:[]} end) as $invalidity
     | (if ($valid | not)
           and (($unknown_children | length) > 0
-               or (["orphan_in_flight","unowned_current","terminal_in_flight"]
-                   | index($invalidity.kind) | not))
+               or (($invalidity_policy[$invalidity.kind // ""].state_unknown_exempt // false) | not))
        then "unknown"
        elif any($decisions_all[]; .verb == "needs-decision" or .verb == "captain-hold") then "captain_decision"
        elif ($active_all | length) > 0 then "active_child_work"
@@ -1821,10 +1903,10 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
       summary_valid=$(jq -r '.valid' "$summary_file")
       if [ "$summary_valid" != true ]; then
         summary_invalidity=$(jq -r '.invalidity.kind // "unknown"' "$summary_file")
-        case "$summary_invalidity" in
-          child_current_unavailable|orphan_in_flight|unowned_current|terminal_in_flight) : ;;
-          *) reason="structured home state invalid" ;;
-        esac
+        if [ "$(printf '%s' "$FM_SNAPSHOT_INVALIDITY_POLICY" \
+                 | jq -r --arg k "$summary_invalidity" '.[$k].parent_tolerates // false')" != true ]; then
+          reason="structured home state invalid"
+        fi
       fi
     fi
 

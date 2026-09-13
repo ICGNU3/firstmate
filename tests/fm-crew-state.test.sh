@@ -46,6 +46,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-classify-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-done-claim-lib.sh"
 
 CREW_STATE="$ROOT/bin/fm-crew-state.sh"
 TMP_ROOT=$(fm_test_tmproot fm-crew-state)
@@ -734,11 +736,37 @@ test_ci_ready_done_log_beats_monitoring_run() {
   printf 'done: PR https://github.com/o/r/pull/2 checks green\n' > "$d/state/feat-ci.status"
   FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-ci)"
   local out; out=$(run_crew_state "$d" feat-ci)
-  assert_contains "$out" "state: done" "ci-ready status log -> done"
+  assert_contains "$out" "state: done-unverified" "a legacy ci-ready claim carries no commit identity, so it is not done"
+  assert_contains "$out" "the claim names no commit identity" "the downgrade names why the claim could not be established"
+  assert_not_contains "$out" "legacy" "the reason asserted when the claim was written, which nothing here observed"
   assert_contains "$out" "source: status-log" "ci-ready state comes from the status log"
   assert_contains "$out" "checks green" "ci-ready detail preserves the report"
   assert_not_contains "$out" "state: working" "ci-ready is not hidden by monitoring run"
   pass "ci-ready status log beats monitoring run"
+}
+
+# A terminal claim is reported as done ONLY while a verdict established for that
+# exact claim stands. This is the other half of the downgrade above: without it
+# the reader would report every claim as unverified and the state would be
+# useless rather than merely strict.
+test_established_claim_is_reported_as_done() {
+  reset_fakes
+  local d claim hash out; d=$(new_case claim-verified)
+  make_repo_on_branch "$d/wt" fm/feat-cv
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-cv.meta" "window=fm:fm-feat-cv" "worktree=$d/wt" "kind=ship"
+  claim="done: pr=https://github.com/o/r/pull/2 head=00112233445566778899aabbccddeeff00112233 - shipped"
+  printf '%s\n' "$claim" > "$d/state/feat-cv.status"
+  hash=$(fm_done_claim_hash "$claim") || fail "could not compute the claim identity"
+  printf 'fm-done-verdict-v1\nverified\n%s\n%s\nPR at the claimed head\n' \
+    "$hash" "$(date +%s)" > "$d/state/feat-cv.done-verdict"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-cv)"
+  out=$(run_crew_state "$d" feat-cv)
+  # `done-unverified` contains `done`, so the negative assertion is what makes
+  # the positive one mean anything.
+  assert_not_contains "$out" "done-unverified" "an established claim must not be downgraded"
+  assert_contains "$out" "state: done" "an established claim must be reported as done"
+  pass "a claim with a matching verified verdict is reported as done"
 }
 
 # Regression for the PR #252 incident: the crew's own status log never got a
@@ -760,7 +788,7 @@ all CI checks passed - still monitoring until merged or closed
 EOF
 )
   local out; out=$(run_crew_state "$d" feat-cigreen)
-  assert_contains "$out" "state: done" "green ci-monitor run -> done"
+  assert_contains "$out" "state: done · " "green ci-monitor run -> done"
   assert_contains "$out" "source: run-step" "green ci-monitor -> run-step source"
   assert_contains "$out" "checks green" "green ci-monitor detail mentions checks green"
   assert_not_contains "$out" "state: working" "green ci-monitor must not read as still validating"
@@ -776,7 +804,7 @@ test_top_level_ci_checks_green_surfaces_done() {
   FM_FAKE_AXI_STATUS="$(run_top_level_ci fm/feat-topcigreen)"
   FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
   local out; out=$(run_crew_state "$d" feat-topcigreen)
-  assert_contains "$out" "state: done" "top-level ci with green log -> done"
+  assert_contains "$out" "state: done · " "top-level ci with green log -> done"
   assert_contains "$out" "source: run-step" "top-level ci green -> run-step source"
   assert_contains "$out" "checks green" "top-level ci green detail mentions checks green"
   assert_not_contains "$out" "state: working" "top-level ci green must not stay working"
@@ -792,7 +820,7 @@ test_ci_monitoring_no_checks_terminal_surfaces_done() {
   FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-cinochecks)"
   FM_FAKE_CI_LOGS="no CI checks reported - still monitoring until merged or closed"
   local out; out=$(run_crew_state "$d" feat-cinochecks)
-  assert_contains "$out" "state: done" "terminal no-checks ci-monitor run -> done"
+  assert_contains "$out" "state: done · " "terminal no-checks ci-monitor run -> done"
   assert_contains "$out" "checks green" "terminal no-checks ci-monitor detail mentions checks green"
   pass "terminal no-checks ci-monitor marker surfaces done"
 }
@@ -950,7 +978,7 @@ test_terminal_passed() {
   fm_write_meta "$d/state/feat-d.meta" "window=fm:fm-feat-d" "worktree=$d/wt" "kind=ship"
   FM_FAKE_AXI_STATUS="$(run_passed fm/feat-d)"
   local out; out=$(run_crew_state "$d" feat-d)
-  assert_contains "$out" "state: done" "passed run -> done"
+  assert_contains "$out" "state: done · " "passed run -> done"
   assert_contains "$out" "source: run-step" "passed -> run-step source"
   pass "terminal passed run is authoritative"
 }
@@ -1348,7 +1376,7 @@ EOF
 )"
   FM_FAKE_CI_LOGS="CI checks running, waiting for results..."
   local out; out=$(run_crew_state "$d" feat-coarseready)
-  assert_contains "$out" "state: done" "coarse ready status -> done"
+  assert_contains "$out" "state: done-unverified" "a legacy coarse-ready claim is not done"
   assert_contains "$out" "source: status-log" "coarse ready status remains status-log sourced"
   assert_not_contains "$out" "state: working" "coarse ready status must not be suppressed by another branch log"
   pass "coarse run does not probe another branch's ci log"
@@ -1373,7 +1401,7 @@ EOF
   local out; out=$(run_crew_state "$d" feat-g)
   assert_not_contains "$out" "source: run-step" "another branch's run not misattributed"
   assert_contains "$out" "source: status-log" "no own run -> falls back to status-log"
-  assert_contains "$out" "state: done" "falls back to the log verb"
+  assert_contains "$out" "state: done-unverified" "falls back to the log verb, downgraded because the claim is unverified"
   pass "another branch's run is ignored, falls back"
 }
 
@@ -1652,6 +1680,148 @@ test_no_run_herdr_idle_agent_status_and_idle_record_stays_idle() {
   pass "an idle record with idle agent_status stays not-busy (no regression for a human-blocked agent)"
 }
 
+# A TERMINAL verb only reports the whole task terminal when the task spoke it in
+# its own voice. bin/fm-brief.sh instructs workers to close a routed phase with
+# `done [key=<work-slug>]`; that closes one sub-event, and reading it as the
+# task's own completion reports a whole task finished on a line that never said
+# so. The unkeyed positive control is what stops this passing vacuously.
+test_a_keyed_done_is_not_the_tasks_own_terminal_state() {
+  reset_fakes
+  local d out
+  d=$(new_case keyed-terminal)
+  make_repo_on_branch "$d/wt" fm/feat-kt
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-kt.meta" "window=fm:fm-feat-kt" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'working [key=docs]: starting\ndone [key=docs]: that routed phase landed\n' \
+    > "$d/state/feat-kt.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-kt
+  out=$(run_crew_state "$d" feat-kt)
+  assert_not_contains "$out" "state: done" "a closed routed phase reported the whole task done"
+  assert_not_contains "$out" "state: failed" "a closed routed phase reported the whole task failed"
+
+  reset_fakes
+  d=$(new_case unkeyed-terminal)
+  make_repo_on_branch "$d/wt" fm/feat-ut
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ut.meta" "window=fm:fm-feat-ut" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'failed: the work did not land\n' > "$d/state/feat-ut.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-ut
+  out=$(run_crew_state "$d" feat-ut)
+  assert_contains "$out" "state: failed" "the task's own terminal line must still be its state"
+  assert_contains "$out" "source: status-log" "the task's own terminal line comes from the status log"
+  pass "a keyed sub-event is not the task's terminal state, and its own line still is"
+}
+
+# EXHAUSTIVENESS, and what it does and does not prove. "Is this line the task
+# speaking its own terminal outcome" has ONE owner in bin/fm-done-claim-lib.sh
+# because five private answers to it are how the fleet's readers came to
+# disagree about a single line. This feeds one keyed `done [key=...]` into a
+# fixture and asserts that the task-level answers AGREE across separate
+# consumers - the current-state reader and the fleet snapshot's current_state -
+# so a reader that answers privately shows up as a disagreement rather than as
+# silence.
+#
+# What it proves: the covered readers agree. What it cannot prove: that a reader
+# added later calls the shared predicate at all. That is why the predicate has
+# one owner and every call site points at it. The other consumers of the same
+# question are pinned by their own suites, each with the same keyed/unkeyed
+# pair: the two upward delivery paths in tests/fm-inactive-reconcile.test.sh and
+# the captain-decision fold in tests/fm-captain-hold-lifecycle.test.sh.
+test_every_reader_agrees_about_a_keyed_terminal_line() {
+  local d out snapshot state
+  for state in keyed unkeyed; do
+    reset_fakes
+    d=$(new_case "agree-$state")
+    make_repo_on_branch "$d/wt" "fm/feat-ag-$state"
+    make_fakebin "$d" >/dev/null
+    fm_write_meta "$d/state/feat-ag.meta" "window=fm:fm-feat-ag" "worktree=$d/wt" "kind=ship" "harness=claude"
+    if [ "$state" = keyed ]; then
+      printf 'done [key=docs]: that routed phase landed\n' > "$d/state/feat-ag.status"
+    else
+      printf 'done: the whole task finished\n' > "$d/state/feat-ag.status"
+    fi
+    FM_FAKE_AXI_STATUS=""
+    FM_FAKE_BUSY=0
+    arm_idle_record "$d/state" feat-ag
+    out=$(run_crew_state "$d" feat-ag)
+    snapshot=$(PATH="$d/fakebin:$PATH" FM_HOME="$d" FM_STATE_OVERRIDE="$d/state" \
+      FM_DATA_OVERRIDE="$d/data" "$ROOT/bin/fm-fleet-snapshot.sh" --json 2>/dev/null \
+      | jq -r '.. | objects | select(.id? == "feat-ag") | .current_state.state // ""' | head -1)
+    if [ "$state" = keyed ]; then
+      assert_not_contains "$out" "state: done" "the current-state reader read a closed routed phase as done"
+      case "$snapshot" in
+        done|done-unverified) fail "the fleet snapshot read a closed routed phase as $snapshot" ;;
+      esac
+    else
+      assert_contains "$out" "state: done" "the task's own terminal line stopped being its state"
+      case "$snapshot" in
+        done|done-unverified) ;;
+        *) fail "the fleet snapshot disagreed about the task's own terminal line: '$snapshot'" ;;
+      esac
+    fi
+  done
+  pass "the current-state reader and the fleet snapshot agree about a keyed terminal line"
+}
+
+# The pre-validation handoff. A no-mistakes worker that has committed but not yet
+# validated writes `ready:`, which is a state of its own - the task is neither
+# done nor failed, it is waiting for firstmate to say "run /no-mistakes". The
+# second half is the one that matters: because `ready:` is not a claim, a task
+# that later passes its run-step reports plain `done` again. That exemption
+# ("a run-step passed on a task that never claimed anything stays done") was
+# unreachable while the brief told every worker to write a pre-validation
+# `done:`, and this proves it is reachable now.
+test_the_prevalidation_handoff_has_its_own_state_and_leaves_done_intact() {
+  reset_fakes
+  local d out
+  d=$(new_case ready-handoff)
+  make_repo_on_branch "$d/wt" fm/feat-rh
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-rh.meta" "window=fm:fm-feat-rh" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'ready: implementation complete and committed\n' > "$d/state/feat-rh.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-rh
+  out=$(run_crew_state "$d" feat-rh)
+  assert_contains "$out" "state: ready" "the pre-validation handoff did not report its own state"
+  assert_not_contains "$out" "done-unverified" "the handoff was downgraded as if it were a claim"
+
+  # `ready` says THIS worker committed and awaits the go-ahead to validate, so it
+  # is under the same speaker test the terminal verbs are. A secondmate publishes
+  # a child's handoff upward as `ready [key=inactive-outcome-...]` into the
+  # parent's status, and read key-blind that would make the mate task claim a
+  # handoff it never made.
+  reset_fakes
+  d=$(new_case ready-keyed)
+  make_repo_on_branch "$d/wt" fm/feat-rk
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-rk.meta" "window=fm:fm-feat-rk" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'ready [key=inactive-outcome-mate-child-ready]: inactive handoff waiting on firstmate child=child\n' \
+    > "$d/state/feat-rk.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-rk
+  out=$(run_crew_state "$d" feat-rk)
+  assert_not_contains "$out" "state: ready" "a child's handoff became the mate task's own state"
+
+  reset_fakes
+  d=$(new_case ready-then-passed)
+  make_repo_on_branch "$d/wt" fm/feat-rp
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-rp.meta" "window=fm:fm-feat-rp" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'ready: implementation complete and committed\n' > "$d/state/feat-rp.status"
+  FM_FAKE_AXI_STATUS="$(run_passed fm/feat-rp)"
+  out=$(run_crew_state "$d" feat-rp)
+  assert_contains "$out" "state: done" "a passed run on a task that claimed nothing was not done"
+  assert_not_contains "$out" "done-unverified" "a machine-established pass was downgraded with no claim to distrust"
+  assert_contains "$out" "source: run-step" "the passed run is the authoritative source"
+  pass "the pre-validation handoff has its own state and leaves a machine-established pass intact"
+}
+
 # (g) no run + idle pane -> the status-log verb, as-is
 test_no_run_idle_pane_uses_log() {
   reset_fakes
@@ -1820,7 +1990,7 @@ test_dead_window_still_reports_terminal_run_step() {
   FM_FAKE_AXI_STATUS="$(run_passed fm/feat-dead-done)"
   FM_FAKE_TMUX_MISSING=1   # the crew's window has closed
   local out; out=$(run_crew_state "$d" feat-dead-done)
-  assert_contains "$out" "state: done" "closed pane still reports terminal run-step done"
+  assert_contains "$out" "state: done-unverified" "closed pane still reports the terminal run-step, downgraded by its unverified claim"
   assert_contains "$out" "source: run-step" "closed pane does not mask the run-step"
   assert_not_contains "$out" "state: unknown" "closed pane with a run must never be unknown"
   pass "closed pane still reports a terminal run-step"
@@ -2495,6 +2665,7 @@ test_genuine_parked_not_superseded
 test_scalar_gate_parked_not_superseded
 test_gate_block_parked_not_superseded
 test_ci_ready_done_log_beats_monitoring_run
+test_established_claim_is_reported_as_done
 test_ci_monitoring_checks_green_surfaces_done
 test_top_level_ci_checks_green_surfaces_done
 test_ci_monitoring_no_checks_terminal_surfaces_done
@@ -2512,6 +2683,9 @@ test_terminal_failed_ci_orphan_after_green_reads_done
 test_terminal_failed_ci_orphan_status_only_reads_done
 test_terminal_failed_ci_genuine_red_stays_failed
 test_terminal_failed_ci_orphan_second_failed_step_stays_failed
+test_a_keyed_done_is_not_the_tasks_own_terminal_state
+test_every_reader_agrees_about_a_keyed_terminal_line
+test_the_prevalidation_handoff_has_its_own_state_and_leaves_done_intact
 test_cross_branch_attribution_via_runs_list
 test_coarse_socket_refusal_reports_blocked
 test_coarse_failed_ledger_with_daemon_down_reports_unknown

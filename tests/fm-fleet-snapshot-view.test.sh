@@ -111,7 +111,10 @@ EOF
     "kind=scout" \
     "mode=scout" \
     "yolo=off"
-  printf 'done: report ready\n' > "$home/state/scout-task.status"
+  printf 'done: report=data/scout-task/report.md - report ready\n' > "$home/state/scout-task.status"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-verify-done.sh" scout-task >/dev/null \
+    || fail "the scout-task claim fixture did not verify against its own report"
   fm_write_meta "$home/state/secondmate-task.meta" \
     "window=firstmate:fm-secondmate-task" \
     "worktree=$home/secondmate-home" \
@@ -532,7 +535,11 @@ EOF
     "kind=scout" \
     "mode=scout"
   record_claude_idle "$home/state" bold-task
-  printf 'done: report ready\n' > "$home/state/bold-task.status"
+  printf 'done: report=%s/bold-task/report.md - report ready\n' "$data" \
+    > "$home/state/bold-task.status"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$data" \
+    "$ROOT/bin/fm-verify-done.sh" bold-task >/dev/null \
+    || fail "the bold-task claim fixture did not verify against its own report"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$data" FM_PROJECTS_OVERRIDE="$projects" \
     FM_SNAPSHOT_NOW=2026-07-14T00:00:00Z "$SNAPSHOT" --json)
@@ -906,9 +913,14 @@ test_completed_scout_report_is_pointer_not_pending() {
   record_claude_idle "$home/state" lavish-103
   # Stale needs-decision, then the scout finished (done). No keyed resolution.
   printf 'needs-decision: adopt approach A or B for Lavish issue 103\n' > "$home/state/lavish-103.status"
-  printf 'done: report ready at data/lavish-103/report.md\n' >> "$home/state/lavish-103.status"
+  printf 'done: report=data/lavish-103/report.md - report ready\n' >> "$home/state/lavish-103.status"
   # Completed report whose PROSE reads like the decision.
   printf '# Lavish 103\nThe open question is whether to adopt approach A or B.\nThis needs a captain decision. Recommendation: A.\n' > "$home/data/lavish-103/report.md"
+  # The terminal claim is established, so the reader reports plain `done` here
+  # and this case keeps testing decisions rather than claim verification.
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-verify-done.sh" lavish-103 >/dev/null \
+    || fail "the scout claim fixture did not verify against its own report"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
   printf '%s' "$out" | jq -e '
@@ -946,6 +958,188 @@ test_parked_scout_decision_stays_pending() {
       and .hints.open_decisions[0].key == "q1"
   ' >/dev/null || fail "a scout still parked at a decision must stay pending: $out"
   pass "a scout still parked at a decision stays pending (terminal clear does not over-fire)"
+}
+
+# Every live child must land in a bucket the summary actually reports, and the
+# guard for that is exhaustive BY CONSTRUCTION rather than by a list somebody
+# remembered to extend: a task belonging to no bucket is a named invalidity, so a
+# state added later without touching the buckets fails loudly instead of
+# vanishing while the summary still says valid. `ready` is the state that
+# exposed this - it means firstmate must act, and it belonged nowhere.
+test_home_summary_buckets_every_live_child() {
+  local home fakebin out root
+  home=$(make_home summary-exhaustive)
+  mkdir -p "$home/projects/handoff"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] handoff-ship - Implementation handed off (repo: alpha) (kind: ship) (since 2026-07-11)
+
+## Queued
+
+## Done
+EOF
+  fm_write_meta "$home/state/handoff-ship.meta" \
+    "window=firstmate:fm-handoff-ship" \
+    "worktree=$home/projects/handoff" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  record_claude_idle "$home/state" handoff-ship
+  printf 'ready: implementation complete and committed\n' > "$home/state/handoff-ship.status"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    .valid == true
+      and .invalidity == {kind:null,ids:[]}
+      and (.holds | any(.id == "handoff-ship"))
+  ' >/dev/null || fail "a child waiting for firstmate to act belonged to no bucket: $out"
+
+  # A state no bucket claims must be loud. The fixture reaches one the only way
+  # a real deployment could - by running a build of the tree whose current-state
+  # reader emits it - so the guard is exercised end to end rather than mocked.
+  root="$home/test-root"
+  mkdir -p "$root"
+  cp -R "$ROOT/bin" "$root/bin"
+  sed -i.bak 's/^    \*)              echo unknown ;;$/    *)              echo novel-state ;;/' \
+    "$root/bin/fm-crew-state.sh"
+  rm -f "$root/bin/fm-crew-state.sh.bak"
+  printf 'note: a line whose verb maps to no bucket\n' > "$home/state/handoff-ship.status"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$root/bin/fm-fleet-snapshot.sh" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    .valid == false
+      and .invalidity.kind == "unbucketed_current"
+      and (.invalidity.ids == ["handoff-ship"])
+      and (.reason | contains("handoff-ship=novel-state"))
+  ' >/dev/null || fail "a state no bucket claims did not surface as an invalidity: $out"
+  pass "the home summary buckets every live child and names any state no bucket claims"
+}
+
+# A row the buckets leave out ON PURPOSE is accounted for, not missing. The
+# exhaustive guard asks "did anyone classify this row", and a program-role
+# in-flight row is deliberately outside $active_all because a program is not
+# active child work - so it must not read as an inconsistency that does not
+# exist. A row nobody classified must still surface, which is what stops this
+# from being a way to silence the guard.
+test_a_deliberate_exclusion_is_accounted_for_not_unbucketed() {
+  local home fakebin out
+  home=$(make_home summary-program-role)
+  mkdir -p "$home/projects/program"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] prog-task - Aggregate program (repo: alpha) (kind: program) (since 2026-07-11)
+
+## Queued
+
+## Done
+EOF
+  fm_write_meta "$home/state/prog-task.meta" \
+    "window=firstmate:fm-prog-task" \
+    "worktree=$home/projects/program" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  printf 'working: aggregating\n' > "$home/state/prog-task.status"
+  local gen
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$home/state" prog-task)
+  "$ROOT/bin/fm-busy-event.sh" apply "$home/state" prog-task busy --gen "$gen" \
+    --source claude-hook --event user-prompt-submit
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    .valid == true
+      and .invalidity == {kind:null,ids:[]}
+      and .reason == null
+  ' >/dev/null || fail "a deliberately excluded program-role child was reported as an inconsistency: $out"
+
+  # The exclusion is exactly as narrow as its reason. It covers `working`, which
+  # is the only state $active_all claims, so a program-role row in a state no
+  # bucket claims must still surface - otherwise the guard is permanently blind
+  # to program rows and the next state token added is absorbed here in silence.
+  local root
+  root="$home/test-root"
+  mkdir -p "$root"
+  cp -R "$ROOT/bin" "$root/bin"
+  sed -i.bak 's/^    \*)              echo unknown ;;$/    *)              echo novel-state ;;/' \
+    "$root/bin/fm-crew-state.sh"
+  rm -f "$root/bin/fm-crew-state.sh.bak"
+  printf 'note: a line whose verb maps to no bucket\n' > "$home/state/prog-task.status"
+  record_claude_idle "$home/state" prog-task
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$root/bin/fm-fleet-snapshot.sh" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    .valid == false
+      and .invalidity.kind == "unbucketed_current"
+      and (.invalidity.ids == ["prog-task"])
+  ' >/dev/null || fail "the guard stayed blind to a program-role row in an unclassified state: $out"
+  pass "a deliberate exclusion is accounted for only in the state its reason covers"
+}
+
+# What each invalidity reason MEANS to its consumers has one owner, and this
+# drives both consumers through the parent snapshot. A data-completeness
+# observation about one child must not cost the parent the whole home's ledger:
+# discarding active_children, decisions_open, holds, queued and landed over one
+# unclassified row is disproportionate to the point of making the guard net
+# harmful. A reason that makes the home's structure itself untrustworthy still
+# discards it, which is what stops "tolerated" from meaning "ignored".
+test_a_parent_tolerates_a_data_level_invalidity_but_not_a_structural_one() {
+  local home mate fakebin ledger out
+  home=$(make_home summary-parent-tolerance)
+  mate=$(make_home summary-parent-tolerance-mate)
+  printf 'mate\n' > "$mate/.fm-secondmate-home"
+  printf '# Fixture home\n' > "$mate/AGENTS.md"
+  mkdir -p "$mate/bin"
+  mkdir -p "$mate/state" "$mate/data" "$mate/config" "$mate/projects"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  printf -- '- mate - fixture domain (home: %s; scope: fixture work; projects: alpha; added 2026-08-28)\n' \
+    "$mate" > "$home/data/secondmates.md"
+  fm_write_secondmate_meta "$home/state/mate.meta" "$mate" "fmtest:fm-mate" alpha claude
+  fakebin=$(make_fakebin "$home")
+  ledger=$(PATH="$fakebin:$PATH" FM_HOME="$mate" "$SNAPSHOT" --secondmate-home-summary) \
+    || fail "could not build the mate's own ledger"
+
+  printf '%s' "$ledger" | jq '.valid = false
+    | .reason = "live child state is accounted for by nothing: odd-task=novel-state"
+    | .invalidity = {kind:"unbucketed_current",ids:["odd-task"]}
+    | .holds = [{id:"held-task",title:"Held",blocked_by:null,blocked_by_ids:[],
+                 unresolved_blocker_ids:[],reason:"waiting",source:"child-state"}]
+    | .counts.holds = 1' > "$mate/state/home-summary.json"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json) \
+    || fail "the parent snapshot failed over a tolerated invalidity"
+  printf '%s' "$out" | jq -e '
+    .secondmate_current.records[0].provenance.selected == "structured-home"
+      and (.secondmate_current.records[0].holds | length) == 1
+      and .secondmate_current.records[0].reconcile_inventory.kind == "unbucketed_current"
+  ' >/dev/null \
+    || fail "a tolerated data-level invalidity cost the parent the home's ledger: $(printf '%s' "$out" | jq -c '.secondmate_current.records[0]')"
+
+  printf '%s' "$ledger" | jq '.valid = false
+    | .reason = "missing structured backlog"
+    | .invalidity = {kind:"missing_backlog",ids:[]}
+    | .holds = [{id:"held-task",title:"Held",blocked_by:null,blocked_by_ids:[],
+                 unresolved_blocker_ids:[],reason:"waiting",source:"child-state"}]
+    | .counts.holds = 1' > "$mate/state/home-summary.json"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json) \
+    || fail "the parent snapshot failed over a structural invalidity"
+  printf '%s' "$out" | jq -e '
+    .secondmate_current.records[0].provenance.selected != "structured-home"
+      and (.secondmate_current.records[0].holds | length) == 0
+  ' >/dev/null \
+    || fail "a structural invalidity was sampled as though the home were readable: $(printf '%s' "$out" | jq -c '.secondmate_current.records[0]')"
+  pass "a parent keeps a home's ledger over a data-level invalidity and discards it over a structural one"
 }
 
 # Home-summary validity treats persistent secondmates as registered homes, not
@@ -1050,6 +1244,9 @@ test_fixture_snapshot_json
 test_home_summary_excludes_secondmate_from_child_inventory
 test_undated_captain_hold_phrasing_and_aging
 test_hold_buckets_are_total_and_text_blind
+test_home_summary_buckets_every_live_child
+test_a_deliberate_exclusion_is_accounted_for_not_unbucketed
+test_a_parent_tolerates_a_data_level_invalidity_but_not_a_structural_one
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness
 test_event_hints_follow_reconciled_current_state
