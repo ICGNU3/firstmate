@@ -10,6 +10,10 @@
 # mode is refused rather than silently rendered as the pipeline contract.
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
+# The no-mistakes block states the worker's pipeline authority where the worker
+# reads it - beside the status-line instruction it acts on when the code is
+# committed - because that is the point at which seven workers in one session
+# stopped early and reported done on work the forge never received.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
 # brief's `## Captain's intent` subsection plus later captain words, never
 # `## Firstmate spec` and never the worker's own tradeoffs.
@@ -218,9 +222,11 @@ EOF
       cat <<EOF
 # Definition of done
 Delivery contract: mode=no-mistakes
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
+\`mode=no-mistakes\` IS your authorization to run the pipeline, and you already have it: firstmate granted it when it dispatched you.
+Driving that pipeline to a PR is your own job and needs no further word from firstmate, so do not stop to ask for permission and do not wait to be told to start.
+Committing the implementation is the MIDDLE of this task, not the end of it.
+When the implementation is committed, append \`working: implemented, starting no-mistakes\` to the status file and invoke /no-mistakes in the same turn.
+This task has exactly one \`done:\` gate and it is the last line of this section; any \`done:\` you append before the forge holds your PR is a false claim, whatever the code is worth.
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
@@ -246,6 +252,10 @@ Two firstmate-specific rules layer on top of that guidance:
   It auto-resolves every gate including ask-user findings with no escalation, and answering your own ask-user finding is a hard rule violation.
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+Before you append that line, read the PR back from the forge with \`gh-axi\` and confirm both the full https:// URL and the PR's head SHA there; report that head SHA alongside the URL when you hand the work over.
+Read both from the forge, never from your local branch: an unpushed commit still prints a SHA locally, and that is exactly how work that never reached the forge gets reported as shipped.
+If the forge has no such PR, or its head is not the work you committed, you have nothing to claim - say what actually happened instead.
+Keep the status line itself in exactly the \`done: PR {url} checks green\` shape above, because firstmate reads the PR out of it; the head SHA goes in your handover, not into that line.
 EOF
       ;;
     *)
