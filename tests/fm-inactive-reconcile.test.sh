@@ -415,6 +415,24 @@ test_secondmate_ledger_delivery_carries_report_and_failure() {
   pass "ledger delivery carries the report pointer, the failed verb, and each new terminal line"
 }
 
+test_canonical_done_claim_carries_pr_to_parent_and_dedupes_by_pr() {
+  local key
+  make_world canonical-ledger; bind_secondmate local
+  write_child "$MATE" child 'done: pr=https://example.test/owner/repo/pull/2 head=00112233445566778899aabbccddeeff00112233 - shipped'
+  awk '$0 !~ /^pr=/' "$MATE/state/child.meta" > "$MATE/state/child.meta.tmp"
+  mv "$MATE/state/child.meta.tmp" "$MATE/state/child.meta"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  key=$(reported_outcome_key "$MATE" child done) || fail "canonical claim receipt key missing"
+  grep -Fq "child child done: pr=https://example.test/owner/repo/pull/2" "$MAIN/state/mate.status" \
+    || fail "canonical terminal claim did not carry its PR to the parent: $(cat "$MAIN/state/mate.status")"
+  [ "$(grep -c "child-outcome-child-done-" "$MAIN/state/mate.status")" = 1 ] \
+    || fail "canonical terminal claim was not delivered exactly once"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  [ "$(grep -c "child-outcome-child-done-" "$MAIN/state/mate.status")" = 1 ] \
+    || fail "the canonical terminal claim was not deduplicated"
+  pass "canonical done claims carry their PR and dedupe on the PR identity"
+}
+
 # A PR URL a worker only ever mentioned in prose is never claimed as the
 # task's delivered PR: without a recorded PR, only a terminal line in the
 # ready-signal shape carries one, and a scout never carries one at all.
@@ -987,6 +1005,7 @@ test_a_handoff_report_is_not_narrated_as_terminal
 test_a_handoff_presentation_is_not_narrated_as_terminal
 test_busy_child_does_not_starve_later_ledger_outcomes
 test_secondmate_ledger_delivery_carries_report_and_failure
+test_canonical_done_claim_carries_pr_to_parent_and_dedupes_by_pr
 test_pr_field_requires_recorded_pr_or_ready_signal_line
 test_terminal_line_during_state_read_yields_to_ledger_delivery
 test_terminal_line_after_inactive_delivery_is_not_reported_twice

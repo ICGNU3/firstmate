@@ -371,34 +371,44 @@ _fm_done_verdict_standing() {  # <state> <task-id> <claim-hash>
 # under a verdict that was true when it was made. The binding lives in the
 # record rather than in a caller's memory precisely so it cannot be forgotten.
 fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason> [<evaluated-head>]
-  local state=$1 id=$2 verdict=$3 hash=$4 reason=$5 evaluated=${6:-} path tmp standing
+  local state=$1 id=$2 verdict=$3 hash=$4 reason=$5 evaluated=${6:-} lock
   case "$verdict" in verified|unverified|contradicted|stale) ;; *) return 2 ;; esac
   case "$hash" in *[!0-9a-f]*|'') return 2 ;; esac
   [ "${#hash}" -eq 64 ] || return 2
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
-  standing=$(_fm_done_verdict_standing "$state" "$id" "$hash")
-  case "$verdict" in
-    unverified)
-      case "$standing" in ''|unverified) ;; *) return 0 ;; esac
-      ;;
-    stale)
-      [ "$standing" != contradicted ] || return 0
-      ;;
-  esac
-  path=$(fm_done_verdict_path "$state" "$id")
-  [ ! -L "$path" ] || return 1
-  umask 077
-  tmp=$(mktemp "$state/.fm-done-verdict.XXXXXX") || return 1
-  {
-    printf '%s\n' "$FM_DONE_VERDICT_VERSION"
-    printf '%s\n' "$verdict"
-    printf '%s\n' "$hash"
-    printf '%s\n' "$(date +%s)"
-    printf '%s\n' "$(fm_done_reason_clean "$reason")"
-    printf '%s\n' "$evaluated"
-  } > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 0600 "$tmp" 2>/dev/null || true
-  mv -f -- "$tmp" "$path" || { rm -f -- "$tmp"; return 1; }
+  (
+    FM_STATE_OVERRIDE=$state
+    export FM_STATE_OVERRIDE
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-wake-lib.sh"
+    lock="$state/.done-verdict-$id.lock"
+    fm_lock_acquire_wait "$lock" || exit 1
+    trap 'fm_lock_release "$lock"' EXIT
+    local path tmp standing
+    standing=$(_fm_done_verdict_standing "$state" "$id" "$hash")
+    case "$verdict" in
+      unverified)
+        case "$standing" in ''|unverified) ;; *) return 0 ;; esac
+        ;;
+      stale)
+        [ "$standing" != contradicted ] || return 0
+        ;;
+    esac
+    path=$(fm_done_verdict_path "$state" "$id")
+    [ ! -L "$path" ] || return 1
+    umask 077
+    tmp=$(mktemp "$state/.fm-done-verdict.XXXXXX") || return 1
+    {
+      printf '%s\n' "$FM_DONE_VERDICT_VERSION"
+      printf '%s\n' "$verdict"
+      printf '%s\n' "$hash"
+      printf '%s\n' "$(date +%s)"
+      printf '%s\n' "$(fm_done_reason_clean "$reason")"
+      printf '%s\n' "$evaluated"
+    } > "$tmp" || { rm -f -- "$tmp"; return 1; }
+    chmod 0600 "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$path" || { rm -f -- "$tmp"; return 1; }
+  )
 }
 
 # Read a verdict record. Returns 1 when it is absent, unreadable, or malformed;

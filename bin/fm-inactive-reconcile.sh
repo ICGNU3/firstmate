@@ -331,9 +331,15 @@ pr_for_task() { # <meta> [preferred-line]
   [ "$(meta_field "$meta" kind)" != scout ] || return 0
   value=$(meta_field "$meta" pr)
   if [ -z "$value" ] && [ -n "$preferred" ]; then
-    value=$(printf '%s\n' "$preferred" \
-      | sed -nE 's|^done: PR (https?://[^[:space:])"]+/pull/[0-9]+)( checks green)?$|\1|p' \
-      | head -1 || true)
+    if fm_done_claim_parse "$preferred" \
+      && fm_done_claim_head_valid "$FM_DONE_CLAIM_HEAD" \
+      && [ -n "$FM_DONE_CLAIM_PR" ]; then
+      value=$FM_DONE_CLAIM_PR
+    else
+      value=$(printf '%s\n' "$preferred" \
+        | sed -nE 's|^done: PR (https?://[^[:space:])"]+/pull/[0-9]+)( checks green)?$|\1|p' \
+        | head -1 || true)
+    fi
   fi
   clean_field "$value"
 }
@@ -459,7 +465,7 @@ report_child_ledger_locked() { # <id> <meta>
       *) verb=blocked; claim=$FM_DONE_CLAIM_STATE ;;
     esac
   fi
-  fingerprint=$(sha256_text "$incarnation|$id|$state|$claim|ledger|$last")
+  fingerprint=$(sha256_text "$incarnation|$id|$state|$claim|$pr|ledger|$last")
   previous=$(grep -v '^[[:space:]]*$' "$status" 2>/dev/null \
     | tail -2 | awk 'NR == 1 { first = $0 } NR == 2 { print first }' || true)
   predecessor_head=$(sha256_text "$previous")

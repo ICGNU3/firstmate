@@ -146,7 +146,8 @@ exit 0
 SH
   chmod +x "$dir/fakebin/gh" "$dir/fakebin/no-mistakes"
   fm_write_meta "$dir/state/task-v.meta" \
-    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=$kind" "mode=$mode"
+    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=$kind" "mode=$mode" \
+    'authorized_repo=github.com/o/r' "spawn_gen=s$(date +%s).fixture.1"
   printf '%s\n' "$dir"
 }
 
@@ -180,7 +181,8 @@ make_local_world() {  # <name>
   # never produced - exactly the commit a fabricated claim would reach for.
   git -C "$dir/repo" commit -q --allow-empty -m later
   fm_write_meta "$dir/state/task-v.meta" \
-    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=ship" "mode=local-only"
+    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=ship" "mode=local-only" \
+    "spawn_gen=s$(date +%s).fixture.1"
   printf '%s\t%s\n' "$dir" "$default"
 }
 
@@ -864,7 +866,8 @@ test_an_absent_mode_still_checks_the_validated_commit() {
   validated=$(git -C "$dir/wt" rev-parse 'HEAD~1')
   # A legacy ship task: spawned before mode= was recorded at all.
   fm_write_meta "$dir/state/task-v.meta" \
-    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=ship"
+    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=ship" \
+    'authorized_repo=github.com/o/r' "spawn_gen=s$(date +%s).fixture.1"
   printf 'done: pr=https://github.com/o/r/pull/7 head=%s - shipped\n' "$shipped" \
     > "$dir/state/task-v.status"
   result=$(FAKE_GH_OUT="OPEN	$shipped	fm/task-v	SUCCESS" \
@@ -887,7 +890,8 @@ test_an_absent_mode_with_a_branch_claim_is_judged_as_local_only() {
   dir=$(make_world absent-mode-branch)
   shipped=$(git -C "$dir/wt" rev-parse HEAD)
   fm_write_meta "$dir/state/task-v.meta" \
-    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=ship"
+    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=ship" \
+    "spawn_gen=s$(date +%s).fixture.1"
   printf 'done: branch=fm/task-v head=%s - ready\n' "$shipped" > "$dir/state/task-v.status"
   result=$(verify "$dir")
   case "$result" in
@@ -1340,6 +1344,66 @@ test_a_direct_pr_claim_on_this_task_branch_verifies() {
   [ "${result%%$'\t'*}" = 3 ] \
     || fail "a forge that reported no head branch was not unverified: $result"
   pass "a direct-PR claim verifies on this task's own branch and never without one"
+}
+
+test_a_pr_repository_must_be_authorized_and_forks_remain_allowed() {
+  local dir head result
+  dir=$(make_world direct-pr-repository ship direct-PR)
+  head=$(git -C "$dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/other/repo/pull/9 head=%s - shipped\n' "$head" \
+    > "$dir/state/task-v.status"
+  result=$(FAKE_GH_OUT=$'OPEN\t'"$head"$'\tfm/task-v\tSUCCESS' verify "$dir")
+  [ "${result%%$'\t'*}" = 4 ] \
+    || fail "an unauthorized PR repository was not refused: $result"
+  case "$result" in
+    *"github.com/other/repo"*"github.com/o/r"*) ;;
+    *) fail "the repository refusal did not name expected and found repositories: $result" ;;
+  esac
+
+  printf 'authorized_repo=github.com/other/repo\n' >> "$dir/state/task-v.meta"
+  result=$(FAKE_GH_OUT=$'OPEN\t'"$head"$'\tfm/task-v\tSUCCESS' verify "$dir")
+  [ "${result%%$'\t'*}" = 0 ] \
+    || fail "an explicitly authorized fork repository did not verify: $result"
+  pass "PR verification refuses unauthorized repositories and accepts recorded forks"
+}
+
+test_a_verified_result_without_durable_persistence_fails_closed() {
+  local dir head result
+  dir=$(make_world verified-write-fails)
+  head=$(git -C "$dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/o/r/pull/7 head=%s - shipped\n' "$head" \
+    > "$dir/state/task-v.status"
+  ln -s /dev/null "$dir/state/task-v.done-verdict" \
+    || fail "the fixture could not block the verdict path"
+  result=$(FAKE_GH_OUT=$'OPEN\t'"$head"$'\tfm/task-v\tSUCCESS' \
+    FAKE_NM_STATUS="$(nm_status fm/task-v "$head")" verify "$dir")
+  [ "${result%%$'\t'*}" = 3 ] \
+    || fail "a verified result with no durable record exited successfully: $result"
+  case "$result" in *"could not record the verdict"*) ;; *) fail "the persistence failure was not reported: $result" ;; esac
+  pass "a verified result fails closed when its durable verdict cannot be written"
+}
+
+test_a_malformed_or_unbound_validation_head_never_verifies() {
+  local dir head result
+  dir=$(make_world malformed-validation)
+  head=$(git -C "$dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/o/r/pull/7 head=%s - shipped\n' "$head" \
+    > "$dir/state/task-v.status"
+  result=$(FAKE_GH_OUT=$'OPEN\t'"$head"$'\tfm/task-v\tSUCCESS' \
+    FAKE_NM_STATUS="branch: fm/task-v
+head: 0
+status: completed
+outcome: passed" verify "$dir")
+  [ "${result%%$'\t'*}" = 3 ] || fail "a one-character validation head verified: $result"
+  case "$result" in *"commit 0"*) ;; *) fail "the malformed validation head was not named: $result" ;; esac
+
+  result=$(FAKE_GH_OUT=$'OPEN\t'"$head"$'\tfm/task-v\tSUCCESS' \
+    FAKE_NM_STATUS="branch: fm/other
+head: $head
+status: completed
+outcome: passed" verify "$dir")
+  [ "${result%%$'\t'*}" = 3 ] || fail "a validation run on another branch verified: $result"
+  pass "validation heads and branches must be bound before comparison"
 }
 
 # --- a report must be this task's own deliverable ----------------------------
@@ -2073,6 +2137,9 @@ test_a_local_only_claim_on_work_the_branch_never_made_is_not_verified
 test_a_retired_branch_claim_on_work_never_made_is_not_verified
 test_a_direct_pr_claim_on_another_branch_is_not_verified
 test_a_direct_pr_claim_on_this_task_branch_verifies
+test_a_pr_repository_must_be_authorized_and_forks_remain_allowed
+test_a_verified_result_without_durable_persistence_fails_closed
+test_a_malformed_or_unbound_validation_head_never_verifies
 test_a_scout_claim_on_another_tasks_report_is_not_verified
 test_a_scout_claim_spelled_through_a_symlink_is_its_own_report
 test_a_later_failed_line_withdraws_the_claim

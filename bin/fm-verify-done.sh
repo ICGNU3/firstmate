@@ -193,8 +193,10 @@ finish() {
     *) rc=2 ;;
   esac
   if hash=$(fm_done_claim_hash "$FM_DONE_CLAIM_LINE"); then
-    fm_done_verdict_write "$STATE" "$ID" "$VERDICT" "$hash" "$REASON" "$EVALUATED_HEAD" \
-      || echo "fm-verify-done: could not record the verdict for $ID" >&2
+    if ! fm_done_verdict_write "$STATE" "$ID" "$VERDICT" "$hash" "$REASON" "$EVALUATED_HEAD"; then
+      echo "fm-verify-done: could not record the verdict for $ID" >&2
+      [ "$rc" -eq 0 ] && rc=3
+    fi
   else
     echo "fm-verify-done: could not compute a claim identity for $ID" >&2
     rc=3
@@ -356,21 +358,30 @@ fi
 # read. A rebase preserves the original `commit:` entry, so honest work that was
 # later rebased still answers here.
 AUTHORED_AT=
-ref_recorded_a_commit() {  # <git-dir-owner> <ref>
-  local wt=$1 ref=$2 entry sha msg
+ref_recorded_a_commit() {  # <git-dir-owner> <ref> <claimed-head> [<creation-sha>] [<min-epoch>]
+  local wt=$1 ref=$2 claimed=$3 creation_sha=${4:-} min_epoch=${5:-} entry sha rest epoch msg
   AUTHORED_AT=
   while IFS= read -r entry; do
     sha=${entry%% *}
-    case "$entry" in *' '*) msg=${entry#* } ;; *) continue ;; esac
+    case "$entry" in *' '*) rest=${entry#* } ;; *) continue ;; esac
+    epoch=${rest%% *}
+    case "$rest" in *' '*) msg=${rest#* } ;; *) continue ;; esac
     case "$sha" in *[!0-9a-f]*|'') continue ;; esac
+    case "$epoch" in *[!0-9]*) continue ;; esac
+    if [ -n "$creation_sha" ] && [ "$sha" = "$creation_sha" ] \
+      && [[ "$msg" == 'branch: Created from '* ]]; then
+      return 1
+    fi
     case "$msg" in
       'commit: '*|'commit (amend): '*|'commit (initial): '*)
+        [ "$sha" = "$claimed" ] || continue
+        [ -z "$min_epoch" ] || [ "$epoch" -ge "$min_epoch" ] || continue
         AUTHORED_AT=$sha
         return 0
         ;;
     esac
   done <<EOF
-$(git -C "$wt" reflog show --format='%H %gs' "$ref" 2>/dev/null || true)
+$(git -C "$wt" reflog show --format='%H %ct %gs' "$ref" 2>/dev/null || true)
 EOF
   return 1
 }
@@ -463,7 +474,7 @@ if [ "$MODE" = local-only ]; then
     # rather than falsity: this arm has been wrong three times by concluding too
     # much from a true observation, and `unverified` refuses the claim just as
     # firmly while never accusing a worker of something it cannot prove.
-    if ! ref_recorded_a_commit "$WT" "refs/heads/$BRANCH"; then
+    if ! ref_recorded_a_commit "$WT" "refs/heads/$BRANCH" "$HEAD_CLAIM" "$CREATED"; then
       verdict_is unverified "branch $BRANCH is at the claimed $HEAD_CLAIM, but its history records no commit it made, so nothing establishes that this task authored that commit rather than inheriting it"
       finish
     fi
@@ -496,7 +507,16 @@ if [ "$MODE" = local-only ]; then
     # is gone and the local copy's HEAD reflog is what survives. It records every
     # commit this worktree made, which is the same authorship question the
     # branch-exists arm asks, read off the only log still there to read.
-    if ! ref_recorded_a_commit "$WT" HEAD; then
+    TASK_INCARNATION=$(meta_field spawn_gen)
+    case "$TASK_INCARNATION" in
+      s[0-9]*.*)
+        TASK_EPOCH=${TASK_INCARNATION#s}
+        TASK_EPOCH=${TASK_EPOCH%%.*}
+        case "$TASK_EPOCH" in ''|*[!0-9]*) TASK_EPOCH= ;; esac
+        ;;
+      *) TASK_EPOCH= ;;
+    esac
+    if [ -z "$TASK_EPOCH" ] || ! ref_recorded_a_commit "$WT" HEAD "$HEAD_CLAIM" '' "$TASK_EPOCH"; then
       verdict_is unverified "the local copy is at the claimed $HEAD_CLAIM and it is on $DEFAULT, but its own history records no commit it made, so nothing establishes that this task authored that commit rather than inheriting it"
       finish
     fi
@@ -606,6 +626,30 @@ if [ "$PR_HEAD" != "$HEAD_CLAIM" ]; then
   finish
 fi
 
+AUTHORIZED_REPOS=
+AUTHORIZED_REPO_INVALID=0
+while IFS= read -r AUTHORIZED_REPO; do
+  [ -n "$AUTHORIZED_REPO" ] || continue
+  AUTHORIZED_IDENTITY=$(fm_pr_github_repo_identity_from_remote "https://$AUTHORIZED_REPO" 2>/dev/null || true)
+  if [ "$AUTHORIZED_IDENTITY" = "$AUTHORIZED_REPO" ]; then
+    AUTHORIZED_REPOS="${AUTHORIZED_REPOS}${AUTHORIZED_REPOS:+,}$AUTHORIZED_REPO"
+  else
+    AUTHORIZED_REPO_INVALID=1
+  fi
+done < <(grep '^authorized_repo=' "$META" 2>/dev/null | cut -d= -f2- || true)
+if [ -z "$AUTHORIZED_REPOS" ] || [ "$AUTHORIZED_REPO_INVALID" -eq 1 ]; then
+  verdict_is unverified "no valid authorized repository identity is recorded for $ID, so $PR_URL cannot be bound to this task"
+  finish
+fi
+FOUND_REPO=$(printf '%s/%s' "$FM_PR_HOST" "$FM_PR_PATH" | tr '[:upper:]' '[:lower:]')
+case ",${AUTHORIZED_REPOS}," in
+  *,"$FOUND_REPO",*) ;;
+  *)
+    verdict_is contradicted "$PR_URL belongs to repository $FOUND_REPO, but this task authorizes repository $AUTHORIZED_REPOS" "$FOUND_REPO"
+    finish
+    ;;
+esac
+
 # A direct-PR task has no validation run to bind the PR to it, so without this
 # the whole verification is "the claim and the forge agree about a head" - two
 # facts a worker could satisfy by naming any open PR whose head it states
@@ -647,13 +691,23 @@ if [ -z "$RUN_OUT" ]; then
 fi
 RUN_BRANCH=$(fm_nm_strip_quotes "$(fm_nm_field "$RUN_OUT" branch)")
 WT_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
-if [ -z "$RUN_BRANCH" ] || [ -z "$WT_BRANCH" ] || [ "$RUN_BRANCH" != "$WT_BRANCH" ]; then
+if [ "$RUN_BRANCH" != "fm/$ID" ] || [ "$WT_BRANCH" != "fm/$ID" ]; then
   verdict_is unverified 'no validation run is attributed to this work, so the validated commit is unknown'
   finish
 fi
 RUN_HEAD=$(fm_nm_strip_quotes "$(fm_nm_field "$RUN_OUT" head)")
 if [ -z "$RUN_HEAD" ]; then
   verdict_is unverified 'the validation run records no commit, so the validated commit is unknown'
+  finish
+fi
+case "$RUN_HEAD" in
+  *[!0-9a-f]*|'')
+    verdict_is unverified "the validation run records malformed commit $RUN_HEAD, so the validated commit is unknown"
+    finish
+    ;;
+esac
+if [ "${#RUN_HEAD}" -lt 7 ]; then
+  verdict_is unverified "the validation run records commit $RUN_HEAD without a usable Git abbreviation, so the validated commit is unknown"
   finish
 fi
 # The run may abbreviate; compare on the shorter of the two, which is exact for

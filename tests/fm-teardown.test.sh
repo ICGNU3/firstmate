@@ -215,6 +215,7 @@ write_meta() {
     "project=$case_dir/project" \
     "kind=$kind" \
     "mode=$mode" \
+    "authorized_repo=github.com/o/r" \
     "spawn_gen=teardown-test-task-x1"
 }
 

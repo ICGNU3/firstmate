@@ -207,6 +207,40 @@ fm_pr_url_parse() {
   FM_PR_NUMBER=${BASH_REMATCH[3]}
 }
 
+fm_pr_github_repo_identity_from_remote() {
+  local raw=${1-} path
+  case "$raw" in
+    https://github.com/*|http://github.com/*|ssh://github.com/*|ssh://git@github.com/*|git://github.com/*)
+      path=${raw#*github.com/}
+      ;;
+    git@github.com:*|ssh://git@github.com:*)
+      path=${raw#*:}
+      ;;
+    *) return 1 ;;
+  esac
+  path=${path%.git}
+  fm_pr_url_parse "https://github.com/$path/pull/1" || return 1
+  printf '%s/%s\n' "$FM_PR_HOST" "$FM_PR_PATH" | tr '[:upper:]' '[:lower:]'
+}
+
+fm_pr_project_authorized_repositories() {
+  local project=$1 remote url identity direction
+  local -a get_url_args
+  [ -d "$project" ] || return 1
+  {
+    while IFS= read -r remote; do
+      for direction in fetch push; do
+        get_url_args=(remote get-url --all "$remote")
+        [ "$direction" = push ] && get_url_args=(remote get-url --all --push "$remote")
+        while IFS= read -r url; do
+          identity=$(fm_pr_github_repo_identity_from_remote "$url" 2>/dev/null || true)
+          [ -n "$identity" ] && printf '%s\n' "$identity"
+        done < <(git -C "$project" "${get_url_args[@]}" 2>/dev/null || true)
+      done
+    done < <(git -C "$project" remote 2>/dev/null || true)
+  } | LC_ALL=C sort -u
+}
+
 fm_pr_head_valid() {
   local head=${1-}
   local LC_ALL=C
