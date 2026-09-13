@@ -2780,7 +2780,7 @@ test_retained_row_artifacts_survive_captain_answers() {
   fm_write_meta "$home/state/$local_id.meta" \
     "window=firstmate:fm-$local_id" "endpoint_task_id=$local_id" "worktree=$local_wt" \
     "project=$local_repo" "harness=codex" "kind=ship" "mode=local-only" \
-    "spawn_gen=fixture-$local_id"
+    "spawn_gen=s$(( $(date +%s) - 60 )).fixture.1"
   printf 'done: branch=fm/%s head=%s - local merge ready\n' \
     "$local_id" "$(git -C "$local_wt" rev-parse HEAD)" > "$home/state/$local_id.status"
   run_captain "$home" hold "$local_id" --reason "captain local merge approval pending" \
