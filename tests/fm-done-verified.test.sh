@@ -1868,6 +1868,44 @@ test_authority_rides_a_merge_and_is_refused_on_a_close() {
   pass "merge authority tags a merge and is refused on a close"
 }
 
+# A close retires the only PR poll, which is deliberate, but the ending must be
+# stated rather than silent: a later reopen and merge reaches nobody unless the PR
+# is registered again. So the retirement is recorded where a reader reconciling
+# this task will meet it.
+#
+# And it must record WITHOUT asserting an open question. `blocked` and
+# `needs-decision` open a durable decision record, and nothing would ever resolve
+# this one - a close is a resolution, not a question - so an open record here
+# would be precisely the dangling-decision defect this fleet keeps removing.
+test_a_close_records_its_retirement_without_opening_a_decision() {
+  local claim dir status_file open
+  claim="done: pr=$PR_A head=$HEAD_A - shipped"
+  dir=$(make_claim_world close-retirement "$claim") \
+    || fail "the close-retirement fixture failed"
+  fm_merge_outcome_report "$dir" "$dir/state" task-v "$PR_A" poll closed-unmerged \
+    || fail "the close outcome could not be published"
+  status_file="$dir/state/task-v.status"
+
+  # Stated, and stating what would otherwise be missed.
+  grep -Fq 'pr-poll-retired-task-v' "$status_file" \
+    || fail "the close left its retirement unrecorded: $(cat "$status_file")"
+  grep -Fq 'bin/fm-pr-check.sh' "$status_file" \
+    || fail "the retirement record does not name what must be re-run: $(cat "$status_file")"
+
+  # Recorded, and opening nothing.
+  open=$(status_open_decisions_incremental "$status_file") || true
+  case "$open" in
+    *pr-poll-retired*) fail "the retirement record left an open decision nothing resolves: $open" ;;
+  esac
+
+  # Published once, however many times the poll reports the same close.
+  fm_merge_outcome_report "$dir" "$dir/state" task-v "$PR_A" poll closed-unmerged \
+    || fail "republishing the close outcome failed"
+  [ "$(grep -c 'pr-poll-retired-task-v' "$status_file")" = 1 ] \
+    || fail "the retirement record was written more than once: $(cat "$status_file")"
+  pass "a close records its retirement and opens no decision behind it"
+}
+
 # A secondary record must never have a veto over the primary report. The verdict
 # write can fail for reasons that have nothing to do with the outcome, and a
 # closed-unmerged observation that goes unpublished is the exact rot this whole
@@ -2307,6 +2345,7 @@ test_a_merge_marks_only_the_claimed_pr_stale
 test_a_close_narrates_only_what_it_contradicts
 test_a_terminal_outcome_invents_no_verdict_without_a_claim
 test_authority_rides_a_merge_and_is_refused_on_a_close
+test_a_close_records_its_retirement_without_opening_a_decision
 test_a_failed_verdict_write_still_publishes_the_outcome
 test_concurrent_verdict_writes_never_lose_a_contradiction
 test_a_refused_verdict_write_strands_no_lock

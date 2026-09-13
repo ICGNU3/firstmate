@@ -229,9 +229,16 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [<outc
   if [ "$status" -eq 0 ] && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
     fm_wake_append check "$outcome-$id-$FM_PR_URL" "$wake_note" || status=1
   fi
+  # A close is a RESOLUTION, so the record of it must not assert an open question
+  # behind it. `blocked` and `needs-decision` are the verbs that open a durable
+  # decision record (bin/fm-classify-lib.sh owns that), and nothing would ever
+  # resolve this one: there is no decision to make, only a fact to know. `note`
+  # is recognised, reaches the drain's unread-status surface, and opens nothing.
+  # The contradiction a close implies is published separately above, under the
+  # verb that does ask firstmate to act.
   if [ "$outcome" = closed-unmerged ]; then
     status_file="$state/$id.status"
-    status_prefix="blocked [key=pr-poll-retired-$id]:"
+    status_prefix="note [key=pr-poll-retired-$id]:"
     status_line="$status_prefix PR $FM_PR_URL closed without merging at $(date +%s); this observation ended and a later reopen or merge will not be reported unless bin/fm-pr-check.sh is run again for $id"
     if [ -L "$status_file" ] || { [ -e "$status_file" ] && [ ! -f "$status_file" ]; }; then
       status=1
