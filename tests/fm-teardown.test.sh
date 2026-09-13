@@ -216,7 +216,7 @@ write_meta() {
     "kind=$kind" \
     "mode=$mode" \
     "authorized_repo=github.com/o/r" \
-    "spawn_gen=teardown-test-task-x1"
+    "spawn_gen=s$(date +%s).teardown-test-task-x1"
 }
 
 # Commit something on the worktree's task branch. Args: case_dir [message]
@@ -3810,6 +3810,33 @@ test_a_stale_verdict_blocks_cleanup() {
   pass "a verdict whose PR head moved goes stale and blocks cleanup"
 }
 
+test_a_new_claim_cannot_inherit_an_older_verdict_rescue() {
+  local case_dir head marker rc=0
+  case_dir=$(make_pr_claim_case claim-rescue-race)
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  establish_pr_claim "$case_dir" "$head"
+  marker="$case_dir/claim-appended"
+  cat > "$case_dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+if [ ! -e "$marker" ]; then
+  printf '%s\n' 'done: pr=https://github.com/o/r/pull/7 head=$head - a newer claim' >> "$case_dir/state/task-x1.status"
+  : > "$marker"
+fi
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a newer unverified claim inherited the older verified rescue"
+  grep -F 'could not be established' "$case_dir/stderr" >/dev/null \
+    || fail "the newer claim refusal did not name the unverified claim"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "the claim race refusal erased the durable task record"
+  pass "teardown rescues only the exact claim it captured"
+}
+
 # A verdict is true about the world when it was made, and the world moves. A
 # standing `verified` record must rescue only the ABSENCE result, never the
 # evidence one, or cleanup deletes the local copy while the branch carries a
@@ -4121,6 +4148,7 @@ test_force_overrides_a_contradicted_claim() {
 
 test_no_terminal_claim_is_unaffected_by_the_gate
 test_a_stale_verdict_blocks_cleanup
+test_a_new_claim_cannot_inherit_an_older_verdict_rescue
 test_a_standing_verdict_does_not_survive_the_head_moving
 test_legacy_claim_without_commit_identity_refuses
 test_claim_naming_the_wrong_commit_refuses

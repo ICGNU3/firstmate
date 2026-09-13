@@ -364,7 +364,7 @@ test_checks_state_is_read_from_a_real_rollup() {
 
   # A finished check run, an in-progress one, and a commit status: all three
   # shapes must reach the record.
-  result=$(FAKE_GH_JSON="{\"state\":\"OPEN\",\"headRefOid\":\"$shipped\",\"url\":\"u\",\"statusCheckRollup\":[{\"conclusion\":\"SUCCESS\"},{\"conclusion\":null,\"status\":\"IN_PROGRESS\"},{\"state\":\"PENDING\"}]}" \
+  result=$(FAKE_GH_JSON="{\"state\":\"OPEN\",\"headRefOid\":\"$shipped\",\"headRefName\":\"fm/task-v\",\"url\":\"u\",\"statusCheckRollup\":[{\"conclusion\":\"SUCCESS\"},{\"conclusion\":null,\"status\":\"IN_PROGRESS\"},{\"state\":\"PENDING\"}]}" \
     FAKE_NM_STATUS="$(nm_status fm/task-v "$shipped")" verify "$dir")
   [ "${result%%$'\t'*}" = 0 ] || fail "a real rollup payload did not verify: $result"
   case "$result" in *IN_PROGRESS*) ;; *) fail "an in-progress check run was dropped from the recorded checks state: $result" ;; esac
@@ -372,7 +372,7 @@ test_checks_state_is_read_from_a_real_rollup() {
   case "$result" in *SUCCESS*) ;; *) fail "a finished check run was dropped from the recorded checks state: $result" ;; esac
 
   # No checks at all is recorded as such, never as a pass.
-  result=$(FAKE_GH_JSON="{\"state\":\"MERGED\",\"headRefOid\":\"$shipped\",\"url\":\"u\",\"statusCheckRollup\":null}" \
+  result=$(FAKE_GH_JSON="{\"state\":\"MERGED\",\"headRefOid\":\"$shipped\",\"headRefName\":\"fm/task-v\",\"url\":\"u\",\"statusCheckRollup\":null}" \
     FAKE_NM_STATUS="$(nm_status fm/task-v "$shipped")" verify "$dir")
   [ "${result%%$'\t'*}" = 0 ] || fail "a pull request with no checks did not verify: $result"
   case "$result" in *"checks: none reported"*) ;; *) fail "an absent rollup was not recorded as none reported: $result" ;; esac
@@ -747,6 +747,27 @@ test_a_local_only_claim_on_introduced_work_verifies() {
   [ "${result%%$'\t'*}" = 0 ] \
     || fail "landed local-only work whose branch still stands was not verified: $result"
   pass "a local-only claim naming work its branch introduced verifies, landed or not"
+}
+
+test_a_branch_authorship_is_bound_to_the_current_incarnation() {
+  local out dir work result future
+  out=$(make_local_world local-incarnation-bound) || fail "the local-only fixture failed"
+  dir=${out%%$'\t'*}
+  git -C "$dir/wt" commit -q --allow-empty -m "work from the earlier incarnation"
+  work=$(git -C "$dir/wt" rev-parse HEAD)
+  future=$(( $(date +%s) + 100 ))
+  fm_write_meta "$dir/state/task-v.meta" \
+    "window=fm:fm-task-v" "worktree=$dir/wt" "kind=ship" "mode=local-only" \
+    "spawn_gen=s$future.fixture.2"
+  printf 'done: branch=fm/task-v head=%s - shipped\n' "$work" > "$dir/state/task-v.status"
+  result=$(verify "$dir")
+  [ "${result%%$'\t'*}" = 3 ] \
+    || fail "work recorded before the current task incarnation was verified: $result"
+  case "$result" in
+    *"records no commit it made"*) ;;
+    *) fail "the incarnation-bound refusal did not name the missing authorship: $result" ;;
+  esac
+  pass "local-only authorship is bound to the current task incarnation"
 }
 
 test_a_local_only_claim_naming_another_branch_is_contradicted() {
@@ -1346,6 +1367,23 @@ test_a_direct_pr_claim_on_this_task_branch_verifies() {
   pass "a direct-PR claim verifies on this task's own branch and never without one"
 }
 
+test_a_no_mistakes_pr_claim_requires_the_live_task_branch() {
+  local dir head result
+  dir=$(make_world no-mistakes-foreign-branch)
+  head=$(git -C "$dir/wt" rev-parse HEAD)
+  printf 'done: pr=https://github.com/o/r/pull/9 head=%s - shipped\n' "$head" \
+    > "$dir/state/task-v.status"
+  result=$(FAKE_GH_OUT=$'OPEN\t'"$head"$'\tfm/other\tSUCCESS' \
+    FAKE_NM_STATUS="$(nm_status fm/task-v "$head")" verify "$dir")
+  [ "${result%%$'\t'*}" = 4 ] \
+    || fail "a no-mistakes PR on another branch was verified: $result"
+  case "$result" in
+    *"fm/other"*"fm/task-v"*) ;;
+    *) fail "the no-mistakes branch refusal did not name both branches: $result" ;;
+  esac
+  pass "no-mistakes PR verification requires the live task branch"
+}
+
 test_a_pr_repository_must_be_authorized_and_forks_remain_allowed() {
   local dir head result
   dir=$(make_world direct-pr-repository ship direct-PR)
@@ -1715,6 +1753,20 @@ test_a_close_contradicts_only_a_claim_about_the_pr_that_closed() {
   pass "a close contradicts only a claim about the PR that actually closed"
 }
 
+test_a_merge_marks_only_the_claimed_pr_stale() {
+  local claim dir other
+  claim="done: pr=$PR_A head=$HEAD_A - shipped"
+  other=https://github.com/o/r/pull/8
+  dir=$(make_claim_world merge-other-pr "$claim" verified "the PR is open at the claimed head") \
+    || fail "the established-claim fixture failed"
+  fm_merge_outcome_report "$dir" "$dir/state" task-v "$other" poll merged \
+    || fail "the unrelated merge outcome could not be published"
+  fm_done_claim_status "$dir/state" task-v
+  [ "$FM_DONE_CLAIM_STATE" = verified ] \
+    || fail "an unrelated PR merge changed the standing claim to $FM_DONE_CLAIM_STATE"
+  pass "a merge marks stale only when it matches the claimed PR"
+}
+
 # The verdict and the words are two statements of one fact, so they must not be
 # able to disagree. A close under a claim about a different PR, or under a claim
 # that names no PR at all, writes no contradiction and must not tell the captain
@@ -1878,7 +1930,7 @@ test_concurrent_verdict_writes_never_lose_a_contradiction() {
 }
 
 test_verdict_write_precedence_keeps_the_stronger_statement() {
-  local dir state claim hash
+  local dir state claim hash delayed_token
   claim="done: pr=$PR_A head=$HEAD_A - shipped"
   dir="$TMP_ROOT/verdict-precedence"
   state="$dir/state"
@@ -1904,11 +1956,19 @@ test_verdict_write_precedence_keeps_the_stronger_statement() {
   fm_done_verdict_read "$state" task-v || fail "the record became unreadable"
   [ "$FM_DONE_VERDICT" = stale ] || fail "an outage overwrote a stale record: $FM_DONE_VERDICT"
 
+  delayed_token=$(fm_done_verdict_snapshot_token "$state" task-v) \
+    || fail "could not snapshot the delayed verifier's standing record"
   fm_done_verdict_write "$state" task-v contradicted "$hash" 'the PR was closed unmerged' \
     || fail "contradicted did not record"
   fm_done_verdict_read "$state" task-v || fail "the record became unreadable"
   [ "$FM_DONE_VERDICT" = contradicted ] \
     || fail "contradicted did not overwrite stale: $FM_DONE_VERDICT"
+
+  fm_done_verdict_write "$state" task-v verified "$hash" 'delayed re-verification' '' "$delayed_token" \
+    && fail "a delayed verification overwrote a contradiction"
+  fm_done_verdict_read "$state" task-v || fail "the record became unreadable after delayed write refusal"
+  [ "$FM_DONE_VERDICT" = contradicted ] \
+    || fail "a delayed verification changed the contradiction: $FM_DONE_VERDICT"
 
   # Falsity is the strongest statement: neither absence nor a changed world
   # may soften it. Only the verifier's own fresh look may.
@@ -1924,7 +1984,8 @@ test_verdict_write_precedence_keeps_the_stronger_statement() {
   [ "$FM_DONE_VERDICT" = contradicted ] \
     || fail "an outage overwrote a contradiction: $FM_DONE_VERDICT"
 
-  fm_done_verdict_write "$state" task-v verified "$hash" 're-established' \
+  fm_done_verdict_write "$state" task-v verified "$hash" 're-established' '' \
+    "$(fm_done_verdict_snapshot_token "$state" task-v)" \
     || fail "a fresh establishment did not record"
   fm_done_verdict_read "$state" task-v || fail "the record became unreadable"
   [ "$FM_DONE_VERDICT" = verified ] \
@@ -2152,6 +2213,7 @@ test_known_verbs_are_not_flagged_as_unrecognised
 test_a_fabricated_local_only_claim_is_not_verified
 test_a_local_only_claim_naming_the_spawn_base_is_contradicted
 test_a_local_only_claim_on_introduced_work_verifies
+test_a_branch_authorship_is_bound_to_the_current_incarnation
 test_a_local_only_claim_naming_another_branch_is_contradicted
 test_a_local_only_claim_on_a_retired_branch_still_verifies
 test_a_retired_branch_claim_with_the_copy_elsewhere_is_not_verified
@@ -2172,6 +2234,7 @@ test_a_local_only_claim_on_work_the_branch_never_made_is_not_verified
 test_a_retired_branch_claim_on_work_never_made_is_not_verified
 test_a_direct_pr_claim_on_another_branch_is_not_verified
 test_a_direct_pr_claim_on_this_task_branch_verifies
+test_a_no_mistakes_pr_claim_requires_the_live_task_branch
 test_a_pr_repository_must_be_authorized_and_forks_remain_allowed
 test_a_verified_result_without_durable_persistence_fails_closed
 test_a_malformed_or_unbound_validation_head_never_verifies
@@ -2184,6 +2247,7 @@ test_only_the_task_itself_may_assert_its_claim
 test_a_merge_marks_an_established_claim_stale
 test_a_close_contradicts_an_established_claim_in_the_record
 test_a_close_contradicts_only_a_claim_about_the_pr_that_closed
+test_a_merge_marks_only_the_claimed_pr_stale
 test_a_close_narrates_only_what_it_contradicts
 test_a_terminal_outcome_invents_no_verdict_without_a_claim
 test_authority_rides_a_merge_and_is_refused_on_a_close

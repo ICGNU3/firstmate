@@ -84,7 +84,7 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [<outc
   local authority=${7-} suffix=
   local self_rc=0 destination='' line lock status=0 wake_note claimed=0 claims_this_pr=0
   local provider host path number claim_state='' claim_probe='' claim_hash=''
-  local claim_rest='' claim_pr='' claim_verdict='' claim_reason=''
+  local claim_rest='' claim_pr='' claim_verdict='' claim_reason='' status_file status_line status_prefix
   # shellcheck disable=SC2034 # Sourced wake helpers consume these scoped globals.
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   FM_MERGE_OUTCOME_ALREADY_RECORDED=false
@@ -184,7 +184,7 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [<outc
         claim_verdict=contradicted
         claim_reason="$FM_PR_URL was closed without merging, so this task is not done"
       fi
-    elif [ "$claim_state" = verified ]; then
+    elif [ "$claim_state" = verified ] && [ "$claims_this_pr" -eq 1 ]; then
       claim_verdict=stale
       claim_reason="$FM_PR_URL merged after this claim was established, so what was established no longer describes the world; re-run bin/fm-verify-done.sh $id"
     fi
@@ -228,6 +228,18 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [<outc
   fi
   if [ "$status" -eq 0 ] && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
     fm_wake_append check "$outcome-$id-$FM_PR_URL" "$wake_note" || status=1
+  fi
+  if [ "$outcome" = closed-unmerged ]; then
+    status_file="$state/$id.status"
+    status_prefix="blocked [key=pr-poll-retired-$id]:"
+    status_line="$status_prefix PR $FM_PR_URL closed without merging at $(date +%s); this observation ended and a later reopen or merge will not be reported unless bin/fm-pr-check.sh is run again for $id"
+    if [ -L "$status_file" ] || { [ -e "$status_file" ] && [ ! -f "$status_file" ]; }; then
+      status=1
+    elif ! { [ -e "$status_file" ] || : > "$status_file"; }; then
+      status=1
+    elif ! grep -Fq -- "$status_prefix" "$status_file" 2>/dev/null; then
+      printf '%s\n' "$status_line" >> "$status_file" || status=1
+    fi
   fi
   # After the report, never in front of it. This write can fail for reasons that
   # have nothing to do with the outcome - a symlink planted at the verdict path,

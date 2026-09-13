@@ -291,6 +291,31 @@ fm_done_verdict_path() {  # <state> <task-id>
   printf '%s/%s.done-verdict' "$1" "$2"
 }
 
+fm_done_verdict_snapshot_token() {  # <state> <task-id>
+  local path token
+  path=$(fm_done_verdict_path "$1" "$2")
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    printf 'absent'
+    return 0
+  fi
+  if [ -L "$path" ] || [ ! -f "$path" ]; then
+    printf 'invalid'
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    token=$(shasum -a 256 "$path" 2>/dev/null | awk '{print $1}') || return 1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    token=$(sha256sum "$path" 2>/dev/null | awk '{print $1}') || return 1
+  else
+    return 1
+  fi
+  case "$token" in
+    [0-9a-f][0-9a-f]*) [ "${#token}" -eq 64 ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$token"
+}
+
 # Collapse a reason to one printable line: the record is line-structured, so a
 # newline or tab in a reason would silently reshape it.
 fm_done_reason_clean() {  # <reason>
@@ -351,7 +376,8 @@ _fm_done_verdict_standing() {  # <state> <task-id> <claim-hash>
 #
 #   contradicted  always written. Positive evidence of falsity outranks
 #                 everything, including a `verified` established earlier.
-#   verified      always written. It is the verifier's fresh look at the world.
+#   verified      written for a fresh look only when its standing snapshot is
+#                 still current; a delayed result cannot erase a contradiction.
 #   stale         written unless the standing record is already `contradicted`,
 #                 which is the stronger statement. Stale says the world moved
 #                 past what was established, not that the claim was false.
@@ -370,8 +396,8 @@ _fm_done_verdict_standing() {  # <state> <task-id> <claim-hash>
 # later commit on that PR can be detected as having moved the world out from
 # under a verdict that was true when it was made. The binding lives in the
 # record rather than in a caller's memory precisely so it cannot be forgotten.
-fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason> [<evaluated-head>]
-  local state=$1 id=$2 verdict=$3 hash=$4 reason=$5 evaluated=${6:-} lock
+fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason> [<evaluated-head>] [<snapshot-token>]
+  local state=$1 id=$2 verdict=$3 hash=$4 reason=$5 evaluated=${6:-} expected=${7:-} lock
   case "$verdict" in verified|unverified|contradicted|stale) ;; *) return 2 ;; esac
   case "$hash" in *[!0-9a-f]*|'') return 2 ;; esac
   [ "${#hash}" -eq 64 ] || return 2
@@ -384,8 +410,15 @@ fm_done_verdict_write() {  # <state> <task-id> <verdict> <claim-hash> <reason> [
     lock="$state/.done-verdict-$id.lock"
     fm_lock_acquire_wait "$lock" || exit 1
     trap 'fm_lock_release "$lock"' EXIT
-    local path tmp standing
+    local path tmp standing current
+    if [ -n "$expected" ]; then
+      current=$(fm_done_verdict_snapshot_token "$state" "$id") || exit 1
+      [ "$current" = "$expected" ] || exit 1
+    fi
     standing=$(_fm_done_verdict_standing "$state" "$id" "$hash")
+    if [ "$verdict" = verified ] && [ "$standing" = contradicted ] && [ -z "$expected" ]; then
+      return 1
+    fi
     case "$verdict" in
       unverified)
         case "$standing" in ''|unverified) ;; *) return 0 ;; esac

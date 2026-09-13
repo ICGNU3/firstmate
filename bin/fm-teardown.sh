@@ -3145,8 +3145,14 @@ fi
 # `contradicted`, which is the three-state rule applied at the only gate that
 # blocks.
 TEARDOWN_CLAIM_ESTABLISHED=0
-if [ -n "$TEARDOWN_CLAIM" ] && fm_done_claim_status "$STATE" "$ID" \
-  && [ "$FM_DONE_CLAIM_STATE" = verified ]; then
+TEARDOWN_CLAIM_HASH=
+if [ -n "$TEARDOWN_CLAIM" ]; then
+  TEARDOWN_CLAIM_HASH=$(fm_done_claim_hash "$TEARDOWN_CLAIM" 2>/dev/null || true)
+fi
+if [ -n "$TEARDOWN_CLAIM" ] && [ -n "$TEARDOWN_CLAIM_HASH" ] \
+  && fm_done_claim_status "$STATE" "$ID" \
+  && [ "$FM_DONE_CLAIM_STATE" = verified ] \
+  && [ "$FM_DONE_CLAIM_LINE" = "$TEARDOWN_CLAIM" ]; then
   TEARDOWN_CLAIM_ESTABLISHED=1
 fi
 if [ -n "$TEARDOWN_CLAIM" ]; then
@@ -3157,7 +3163,9 @@ if [ -n "$TEARDOWN_CLAIM" ]; then
   # evidence of falsity (4), and it never rescues staleness (5) - staleness is
   # the case where that very record is the thing that went out of date.
   if [ "$TEARDOWN_CLAIM_RC" -eq 3 ] && [ "$TEARDOWN_CLAIM_ESTABLISHED" -eq 1 ]; then
-    TEARDOWN_CLAIM_RC=0
+    if [ "$(fm_done_claim_last "$STATE/$ID.status")" = "$TEARDOWN_CLAIM" ]; then
+      TEARDOWN_CLAIM_RC=0
+    fi
   fi
   case "$TEARDOWN_CLAIM_RC" in
     0|2) ;;

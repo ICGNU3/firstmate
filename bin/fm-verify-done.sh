@@ -164,6 +164,7 @@ meta_field() {  # <key>
 
 VERDICT=
 REASON=
+VERDICT_EXPECTED_TOKEN=
 # Every arm below records its verdict through here, and here defers to
 # fm_done_verdict_resolve in bin/fm-done-claim-lib.sh - the owner of the verdict
 # vocabulary - so the rule that `contradicted` must carry the observation it
@@ -184,7 +185,7 @@ verdict_is() {  # <verdict> <reason> [<observed>]
 # for arms that evaluate no PR.
 EVALUATED_HEAD=
 finish() {
-  local hash rc=0
+  local hash current_claim rc=0
   case "$VERDICT" in
     verified) rc=0 ;;
     unverified) rc=3 ;;
@@ -192,8 +193,12 @@ finish() {
     stale) rc=5 ;;
     *) rc=2 ;;
   esac
-  if hash=$(fm_done_claim_hash "$FM_DONE_CLAIM_LINE"); then
-    if ! fm_done_verdict_write "$STATE" "$ID" "$VERDICT" "$hash" "$REASON" "$EVALUATED_HEAD"; then
+  current_claim=$(fm_done_claim_last "$STATE/$ID.status")
+  if [ "$current_claim" != "$FM_DONE_CLAIM_LINE" ]; then
+    echo "fm-verify-done: the terminal claim changed while verifying $ID" >&2
+    rc=3
+  elif hash=$(fm_done_claim_hash "$FM_DONE_CLAIM_LINE"); then
+    if ! fm_done_verdict_write "$STATE" "$ID" "$VERDICT" "$hash" "$REASON" "$EVALUATED_HEAD" "$VERDICT_EXPECTED_TOKEN"; then
       echo "fm-verify-done: could not record the verdict for $ID" >&2
       [ "$rc" -eq 0 ] && rc=3
     fi
@@ -212,6 +217,10 @@ if [ -z "$CLAIM" ]; then
 fi
 FM_DONE_CLAIM_LINE=$CLAIM
 fm_done_claim_parse "$CLAIM" || { echo "fm-verify-done: $ID has no terminal claim to verify" >&2; exit 2; }
+VERDICT_EXPECTED_TOKEN=$(fm_done_verdict_snapshot_token "$STATE" "$ID") || {
+  echo "fm-verify-done: could not snapshot the standing verdict for $ID" >&2
+  exit 3
+}
 
 KIND=$(meta_field kind); [ -n "$KIND" ] || KIND=ship
 MODE=$(meta_field mode)
@@ -474,7 +483,17 @@ if [ "$MODE" = local-only ]; then
     # rather than falsity: this arm has been wrong three times by concluding too
     # much from a true observation, and `unverified` refuses the claim just as
     # firmly while never accusing a worker of something it cannot prove.
-    if ! ref_recorded_a_commit "$WT" "refs/heads/$BRANCH" "$HEAD_CLAIM" "$CREATED"; then
+    TASK_INCARNATION=$(meta_field spawn_gen)
+    case "$TASK_INCARNATION" in
+      s[0-9]*.*)
+        TASK_EPOCH=${TASK_INCARNATION#s}
+        TASK_EPOCH=${TASK_EPOCH%%.*}
+        case "$TASK_EPOCH" in ''|*[!0-9]*) TASK_EPOCH= ;; esac
+        ;;
+      *) TASK_EPOCH= ;;
+    esac
+    if [ -z "$TASK_EPOCH" ] \
+      || ! ref_recorded_a_commit "$WT" "refs/heads/$BRANCH" "$HEAD_CLAIM" "$CREATED" "$TASK_EPOCH"; then
       verdict_is unverified "branch $BRANCH is at the claimed $HEAD_CLAIM, but its history records no commit it made, so nothing establishes that this task authored that commit rather than inheriting it"
       finish
     fi
@@ -656,18 +675,16 @@ esac
 # correctly. That is consistency, not authorship. Every other arm binds its
 # evidence to this task by name (local-only to fm/<id>, scout to this task's own
 # data directory) and this one binds the same way, through the branch the forge
-# says the PR is built from. A no-mistakes task is already bound by the
-# validated-commit check below, which requires the run's branch to be this
-# worktree's own.
+# says the PR is built from.
+if [ -z "$PR_BRANCH" ]; then
+  verdict_is unverified "the forge reported no head branch for $PR_URL, so nothing establishes that this PR is this task's work"
+  finish
+fi
+if [ "$PR_BRANCH" != "fm/$ID" ]; then
+  verdict_is contradicted "$PR_URL is built from $PR_BRANCH, not this task's fm/$ID" "$PR_BRANCH"
+  finish
+fi
 if [ "$MODE" != no-mistakes ]; then
-  if [ -z "$PR_BRANCH" ]; then
-    verdict_is unverified "the forge reported no head branch for $PR_URL, so nothing establishes that this PR is this task's work"
-    finish
-  fi
-  if [ "$PR_BRANCH" != "fm/$ID" ]; then
-    verdict_is contradicted "$PR_URL is built from $PR_BRANCH, not this task's fm/$ID" "$PR_BRANCH"
-    finish
-  fi
   verdict_is verified "$PR_URL is $PR_STATE at the claimed $HEAD_CLAIM from this task's $PR_BRANCH; checks: $CHECKS"
   finish
 fi

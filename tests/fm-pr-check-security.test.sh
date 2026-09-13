@@ -1623,6 +1623,11 @@ test_closed_unmerged_poll_retires_without_a_claim_to_contradict() {
   esac
   [ ! -e "$state/task-a.done-verdict" ] \
     || fail "a close with no claim on record invented a verdict"
+  grep -F 'closed without merging' "$state/task-a.status" >/dev/null \
+    || fail "a closed poll did not leave a durable retirement record in the task status"
+  grep -F 'reopen or merge will not be reported unless bin/fm-pr-check.sh is run again' \
+    "$state/task-a.status" >/dev/null \
+    || fail "the retirement record did not make re-registration discoverable"
   ack_watcher_cycle "$state" || fail "close notification handling acknowledgement failed"
   assert_poll_absent "$state" task-a
 
