@@ -441,11 +441,12 @@ test_no_mistakes_dod_grants_pipeline_authority_at_the_done_instruction() {
   assert_grep 'append `failed: {what the forge actually shows}` when delivery genuinely failed, then stop.' "$brief" \
     "no-mistakes DOD must expose a failed forge-verification status"
   auth_line=$(grep -n -F -- "You never attest to what the forge holds: firstmate reads the PR head from the forge itself." "$brief" | head -1 | cut -d: -f1)
-  [ -n "$done_line" ] && [ -n "$auth_line" ] && [ "$((done_line - auth_line))" -le 5 ] \
+  [ -n "$done_line" ] && [ -n "$auth_line" ] && [ "$((done_line - auth_line))" -ge 0 ] \
+    && [ "$((done_line - auth_line))" -le 5 ] \
     || fail "no-mistakes DOD separated forge-owned verification from the terminal done gate"
 
   # fm-inactive-reconcile.sh scrapes a terminal line in exactly this shape when
-  # meta pr= is absent, so the head SHA goes in the handover, not into the line.
+  # meta pr= is absent, while firstmate verifies the PR head from the forge.
   assert_grep "Keep the status line itself in exactly the \`done: PR {url} checks green\` shape" "$brief" \
     "no-mistakes DOD must preserve the machine-read terminal status-line shape"
   pass "fm-brief.sh: the no-mistakes DOD grants pipeline authority where the finishing worker reads it"
