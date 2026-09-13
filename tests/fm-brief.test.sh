@@ -418,12 +418,18 @@ test_no_mistakes_dod_grants_pipeline_authority_at_the_done_instruction() {
     "no-mistakes DOD lost its single terminal done gate"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks and brace tokens must stay literal
   done_line=$(grep -n -F -- 'append `done: PR {url} checks green` and stop.' "$brief" | head -1 | cut -d: -f1)
-  assert_grep "read the PR back from the forge with \`gh-axi\` and confirm both the full https:// URL and the PR's head SHA" "$brief" \
-    "no-mistakes DOD must require the PR URL and head SHA to be read back from the forge"
-  assert_grep "Read both from the forge, never from your local branch" "$brief" \
-    "no-mistakes DOD must forbid sourcing the terminal claim from the local branch"
-  assert_grep "an unpushed commit still prints a SHA locally" "$brief" \
-    "no-mistakes DOD must say why a local SHA is not evidence of delivery"
+  assert_grep "the PR URL is the deliverable and it is sufficient." "$brief" \
+    "no-mistakes DOD must make the PR URL the sufficient deliverable"
+  assert_grep "You never attest to what the forge holds: firstmate reads the PR head from the forge itself." "$brief" \
+    "no-mistakes DOD must keep forge-head attestation with firstmate"
+  assert_grep "genuinely pushed the branch and opened the PR" "$brief" \
+    "no-mistakes DOD must require a genuinely pushed branch and opened PR"
+  assert_grep "copying the full https:// URL from what the PR step actually produced rather than composing one." "$brief" \
+    "no-mistakes DOD must require copying the URL from the PR step"
+  assert_grep "Firstmate verifies a terminal claim against the forge, so a claim that names no PR cannot be checked at all, and a commit that exists only on the local branch is not a delivery." "$brief" \
+    "no-mistakes DOD must explain why forge-backed URL evidence matters"
+  assert_no_grep "head SHA" "$brief" \
+    "no-mistakes DOD must not require the worker to hand over a forge head SHA"
   assert_grep "pipeline-authored fix commits stacked on the implementation commit" "$brief" \
     "no-mistakes DOD must accept pipeline-owned fix commits at the terminal head"
   assert_no_grep "head is not the work you committed" "$brief" \
@@ -434,9 +440,9 @@ test_no_mistakes_dod_grants_pipeline_authority_at_the_done_instruction() {
     "no-mistakes DOD must expose a blocked forge-verification status"
   assert_grep 'append `failed: {what the forge actually shows}` when delivery genuinely failed, then stop.' "$brief" \
     "no-mistakes DOD must expose a failed forge-verification status"
-  auth_line=$(grep -n -F -- "Read both from the forge, never from your local branch" "$brief" | head -1 | cut -d: -f1)
-  [ -n "$done_line" ] && [ -n "$auth_line" ] && [ "$((auth_line - done_line))" -le 4 ] \
-    || fail "no-mistakes DOD separated the forge readback from the terminal done gate"
+  auth_line=$(grep -n -F -- "You never attest to what the forge holds: firstmate reads the PR head from the forge itself." "$brief" | head -1 | cut -d: -f1)
+  [ -n "$done_line" ] && [ -n "$auth_line" ] && [ "$((done_line - auth_line))" -le 5 ] \
+    || fail "no-mistakes DOD separated forge-owned verification from the terminal done gate"
 
   # fm-inactive-reconcile.sh scrapes a terminal line in exactly this shape when
   # meta pr= is absent, so the head SHA goes in the handover, not into the line.

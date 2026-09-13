@@ -251,11 +251,13 @@ Two firstmate-specific rules layer on top of that guidance:
 - NEVER pass \`--yes\` (or \`-y\`) to \`no-mistakes axi run\` or \`no-mistakes axi respond\`. It is banned fleet-wide.
   It auto-resolves every gate including ask-user findings with no escalation, and answering your own ask-user finding is a hard rule violation.
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
-Before you append that line, read the PR back from the forge with \`gh-axi\` and confirm both the full https:// URL and the PR's head SHA there; report that head SHA alongside the URL when you hand the work over.
-Read both from the forge, never from your local branch: an unpushed commit still prints a SHA locally, and that is exactly how work that never reached the forge gets reported as shipped.
+After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), the PR URL is the deliverable and it is sufficient.
+Before appending the terminal line, confirm that you genuinely pushed the branch and opened the PR, copying the full https:// URL from what the PR step actually produced rather than composing one.
+You never attest to what the forge holds: firstmate reads the PR head from the forge itself.
+Firstmate verifies a terminal claim against the forge, so a claim that names no PR cannot be checked at all, and a commit that exists only on the local branch is not a delivery.
 If the forge has no such PR for this run's validated branch, or its head is not this run's authoritative pipeline final head, which may include pipeline-authored fix commits stacked on the implementation commit, append \`blocked: {what the forge actually shows}\` when firstmate action is needed to get the work to the forge, or append \`failed: {what the forge actually shows}\` when delivery genuinely failed, then stop.
-Keep the status line itself in exactly the \`done: PR {url} checks green\` shape above, because firstmate reads the PR out of it; the head SHA goes in your handover, not into that line.
+After that confirmation, append \`done: PR {url} checks green\` and stop. You are finished.
+Keep the status line itself in exactly the \`done: PR {url} checks green\` shape above, because firstmate reads the PR out of it.
 EOF
       ;;
     *)
