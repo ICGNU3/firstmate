@@ -260,6 +260,7 @@ test_ship_mode_is_explicit_not_registry() {
   brief="$home/data/brief-explicit-a5/brief.md"
   grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
     || fail "registered direct-PR posture overrode the explicit --mode"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks and brace tokens must stay literal
   assert_grep 'by running `no-mistakes axi run --intent "..."`' "$brief" \
     "explicit no-mistakes brief did not render the pipeline definition of done"
 
@@ -436,8 +437,10 @@ test_no_mistakes_dod_grants_pipeline_authority_at_the_done_instruction() {
     "no-mistakes DOD still requires personal authorship of the terminal head"
   assert_no_grep "say what actually happened instead" "$brief" \
     "no-mistakes DOD still leaves forge verification failures without a machine-readable status"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks and brace tokens must stay literal
   assert_grep 'append `blocked: {what the forge actually shows}` when firstmate action is needed to get the work to the forge' "$brief" \
     "no-mistakes DOD must expose a blocked forge-verification status"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks and brace tokens must stay literal
   assert_grep 'append `failed: {what the forge actually shows}` when delivery genuinely failed, then stop.' "$brief" \
     "no-mistakes DOD must expose a failed forge-verification status"
   auth_line=$(grep -n -F -- "You never attest to what the forge holds: firstmate reads the PR head from the forge itself." "$brief" | head -1 | cut -d: -f1)
