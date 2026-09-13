@@ -225,7 +225,7 @@ Delivery contract: mode=no-mistakes
 \`mode=no-mistakes\` IS your authorization to run the pipeline, and you already have it: firstmate granted it when it dispatched you.
 Driving that pipeline to a PR is your own job and needs no further word from firstmate, so do not stop to ask for permission and do not wait to be told to start.
 Committing the implementation is the MIDDLE of this task, not the end of it.
-When the implementation is committed, append \`working: implemented, starting no-mistakes\` to the status file and invoke /no-mistakes in the same turn.
+When the implementation is committed, append \`working: implemented, starting no-mistakes\` to the status file and start the pipeline in the same turn by running \`no-mistakes axi run --intent "..."\`; invoking the no-mistakes skill through this harness is equivalent convenience.
 This task has exactly one \`done:\` gate and it is the last line of this section; any \`done:\` you append before the forge holds your PR is a false claim, whatever the code is worth.
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
@@ -254,7 +254,7 @@ Two firstmate-specific rules layer on top of that guidance:
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 Before you append that line, read the PR back from the forge with \`gh-axi\` and confirm both the full https:// URL and the PR's head SHA there; report that head SHA alongside the URL when you hand the work over.
 Read both from the forge, never from your local branch: an unpushed commit still prints a SHA locally, and that is exactly how work that never reached the forge gets reported as shipped.
-If the forge has no such PR, or its head is not the work you committed, you have nothing to claim - say what actually happened instead.
+If the forge has no such PR for this run's validated branch, or its head is not this run's authoritative pipeline final head, which may include pipeline-authored fix commits stacked on the implementation commit, you have nothing to claim - say what actually happened instead.
 Keep the status line itself in exactly the \`done: PR {url} checks green\` shape above, because firstmate reads the PR out of it; the head SHA goes in your handover, not into that line.
 EOF
       ;;

@@ -260,7 +260,7 @@ test_ship_mode_is_explicit_not_registry() {
   brief="$home/data/brief-explicit-a5/brief.md"
   grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
     || fail "registered direct-PR posture overrode the explicit --mode"
-  assert_grep "invoke /no-mistakes in the same turn" "$brief" \
+  assert_grep 'by running `no-mistakes axi run --intent "..."`' "$brief" \
     "explicit no-mistakes brief did not render the pipeline definition of done"
 
   # An unregistered project is not a blocker either, because nothing is looked up.
@@ -406,7 +406,7 @@ test_no_mistakes_dod_grants_pipeline_authority_at_the_done_instruction() {
   # produced this, so the authorization must render beside the status-line
   # instruction the worker acts on when the code is committed.
   auth_line=$(grep -n -F -- "needs no further word from firstmate" "$brief" | head -1 | cut -d: -f1)
-  commit_line=$(grep -n -F -- "invoke /no-mistakes in the same turn" "$brief" | head -1 | cut -d: -f1)
+  commit_line=$(grep -n -F -- "start the pipeline in the same turn by running" "$brief" | head -1 | cut -d: -f1)
   [ -n "$auth_line" ] && [ -n "$commit_line" ] \
     || fail "no-mistakes DOD lost the authorization or the implementation-commit instruction"
   [ "$((commit_line - auth_line))" -ge 0 ] && [ "$((commit_line - auth_line))" -le 4 ] \
@@ -424,6 +424,10 @@ test_no_mistakes_dod_grants_pipeline_authority_at_the_done_instruction() {
     "no-mistakes DOD must forbid sourcing the terminal claim from the local branch"
   assert_grep "an unpushed commit still prints a SHA locally" "$brief" \
     "no-mistakes DOD must say why a local SHA is not evidence of delivery"
+  assert_grep "pipeline-authored fix commits stacked on the implementation commit" "$brief" \
+    "no-mistakes DOD must accept pipeline-owned fix commits at the terminal head"
+  assert_no_grep "head is not the work you committed" "$brief" \
+    "no-mistakes DOD still requires personal authorship of the terminal head"
   auth_line=$(grep -n -F -- "Read both from the forge, never from your local branch" "$brief" | head -1 | cut -d: -f1)
   [ -n "$done_line" ] && [ -n "$auth_line" ] && [ "$((auth_line - done_line))" -le 4 ] \
     || fail "no-mistakes DOD separated the forge readback from the terminal done gate"
