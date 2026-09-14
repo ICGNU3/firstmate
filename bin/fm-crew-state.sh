@@ -60,7 +60,12 @@
 #      checks green, also reads done (held-for-merge), never failed: a monitor
 #      whose only remaining job is to observe a human merge decision must not
 #      convert the absence of that decision into a failure verdict
-#      (nm_failed_run_is_green_held_ci; 2026-09-05 jr-voice incident). In the
+#      (nm_failed_run_is_green_held_ci; 2026-09-05 jr-voice incident). A
+#      terminal FAILED run that passed every validation step and failed only at
+#      a delivery step (push, pr) stays failed but is relabeled "validation
+#      passed; delivery failed at the <step> step", so a supervisor can tell
+#      validated-but-undelivered work from work that did not validate
+#      (nm_failed_run_is_delivery_failure). In the
 #      coarse runs-ledger fallback (no steps table, no ci log), a terminal
 #      FAILED record whose daemon an explicit probe proves down reads unknown,
 #      never failed: an instrument failure must not read as work failure
@@ -459,6 +464,83 @@ nm_reclassify_failed_run_as_held_green() {
   return 0
 }
 
+# Steps that DELIVER an already-validated branch instead of judging it: the
+# push to the configured push target, and the PR opened against it. A failure in
+# one of them means every gate passed and the work could not be handed over -
+# a completely different supervisor response from a validation failure, which
+# means the work itself is wrong. `ci` is deliberately NOT in this set: a red
+# check is a verdict on the code, not a transport failure, and the orphaned-ci
+# case above already owns the one shape where a ci failure is not a verdict.
+NM_DELIVERY_STEPS="push pr"
+
+# Name of the delivery step a terminal failed run stopped at, set only by
+# nm_failed_run_is_delivery_failure below.
+NM_DELIVERY_FAILED_STEP=""
+
+nm_step_is_delivery() {  # <step>
+  local candidate
+  for candidate in $NM_DELIVERY_STEPS; do
+    [ "$candidate" = "$1" ] && return 0
+  done
+  return 1
+}
+
+# 0 when a terminal FAILED run passed every validation step and failed only
+# while delivering. Requires the exact shape, all on positive evidence: a
+# steps[] table where every step before the failure completed, exactly one step
+# failed and it is a delivery step, and every step after it never started
+# (`pending`/`skipped`). That never-started tail is what proves the pipeline
+# stopped AT delivery rather than continuing past it, so a run that pushed,
+# failed to open its PR, and then somehow ran ci cannot reach this shape.
+# Observed 2026-09-13 on two independent firstmate tasks: review, test and lint
+# completed, `push` returned 403 from a push target this machine's account can
+# only read, and the run was recorded with the same "run failed" string as a run
+# whose validation failed.
+nm_failed_run_is_delivery_failure() {
+  local rows row rest step status seen_failure=0
+  NM_DELIVERY_FAILED_STEP=""
+  rows=$(nm_steps_rows)
+  [ -n "$rows" ] || return 1
+  while IFS= read -r row; do
+    row=$(trim "$row")
+    [ -n "$row" ] || continue
+    step=$(trim "${row%%,*}")
+    rest=${row#*,}
+    status=$(strip_quotes "$(trim "${rest%%,*}")")
+    if [ "$seen_failure" = 1 ]; then
+      case "$status" in
+        pending|skipped) continue ;;
+        *) NM_DELIVERY_FAILED_STEP=""; return 1 ;;
+      esac
+    fi
+    case "$status" in
+      completed) continue ;;
+      failed)
+        nm_step_is_delivery "$step" || return 1
+        NM_DELIVERY_FAILED_STEP=$step
+        seen_failure=1
+        ;;
+      *) return 1 ;;
+    esac
+  done <<EOF
+$rows
+EOF
+  [ "$seen_failure" = 1 ]
+}
+
+# Relabel a terminal failed run that only failed to deliver. The state stays
+# `failed` - an undelivered branch is a loud failure and must never read as
+# progress - but the detail names delivery, so a supervisor reading the line
+# can tell "validated, could not deliver" (fix the push target, the work is
+# intact) from "did not validate" (the work is wrong) without reading the
+# worker's prose.
+nm_reclassify_failed_run_as_delivery_failure() {
+  nm_failed_run_is_delivery_failure || return 1
+  RUN_STATE=failed
+  RUN_DETAIL="validation passed; delivery failed at the $NM_DELIVERY_FAILED_STEP step"
+  return 0
+}
+
 # 0 when an explicit probe proves the shared daemon down: `no-mistakes daemon
 # status` is the canonical down-probe (the same one fm-brief.sh hands crews
 # before a blocked append) and exits non-zero when the daemon is not running.
@@ -664,7 +746,9 @@ if [ "$HAVE_RUN" = 1 ]; then
         passed)        RUN_STATE="done"; RUN_DETAIL="run passed: PR merged/closed" ;;
         checks-passed) RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review" ;;
         failed)
-          if nm_reclassify_failed_run_as_held_green; then :; else
+          if nm_reclassify_failed_run_as_held_green; then :
+          elif nm_reclassify_failed_run_as_delivery_failure; then :
+          else
             RUN_STATE=failed; RUN_DETAIL="run failed"
           fi ;;
         cancelled)     RUN_STATE=failed; RUN_DETAIL="run cancelled" ;;
@@ -691,7 +775,9 @@ if [ "$HAVE_RUN" = 1 ]; then
         running|fixing) RUN_STATE=working; RUN_DETAIL="validating ($status)" ;;
         completed)      RUN_STATE="done"; RUN_DETAIL="run completed" ;;
         failed)
-          if nm_reclassify_failed_run_as_held_green; then :; else
+          if nm_reclassify_failed_run_as_held_green; then :
+          elif nm_reclassify_failed_run_as_delivery_failure; then :
+          else
             RUN_STATE=failed; RUN_DETAIL="run failed"
           fi ;;
         cancelled)      RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;

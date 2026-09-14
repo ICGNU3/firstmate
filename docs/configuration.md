@@ -222,6 +222,18 @@ The [`firstmate-coding-guidelines` skill](../.agents/skills/firstmate-coding-gui
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the firstmate-specific local test policy and entry points.
 Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](fm-test-portable-shards.md); [herdr-backend.md](herdr-backend.md#destructive-lab-safety) owns the real-Herdr lane's isolation boundary, and [runtime-backends.md](verification/runtime-backends.md#herdr) owns active evidence.
 
+## Push target for the no-mistakes gate (config/fork-owner)
+
+The no-mistakes gate pushes a validated branch to the repo it was initialized against, which `no-mistakes init` takes from the clone's `origin`.
+When this home's authenticated forge account has only read access to that repo, the run reaches its `push` step with a 403 and the whole run is recorded failed although the code validated.
+[`bin/fm-fork-target.sh`](../bin/fm-fork-target.sh) is the single owner of which push target firstmate initializes a clone against, and its header owns the exact resolution order and commands.
+Optional `config/fork-owner` holds one token: the forge account this home owns its forks under.
+It is LOCAL, gitignored, applies to every project in the home, and is inherited by secondmate homes.
+When it is absent, the resolver falls back to the account `gh` is authenticated as, and uses it only when that account differs from origin's owner and already holds a fork of the repo; otherwise the gate is initialized against `origin` exactly as before.
+
+`bin/fm-fork-target.sh init <dir>` is also the repair path for a home whose gate was already initialized against a target it cannot write, because `no-mistakes init` refreshes an existing registration.
+[CONTRIBUTING.md](../CONTRIBUTING.md) owns the manual contributor setup this automates.
+
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
 Domain-local preferences for one captain's fleet live locally in each home's `data/captain.md`; it is gitignored and printed in the session-start context digest after `data/projects.md` and optional `data/secondmates.md`.
