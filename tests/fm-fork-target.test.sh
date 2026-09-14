@@ -238,6 +238,20 @@ test_malformed_declared_owner_is_refused() {
   pass "fork-owner rejects internal whitespace and extra lines"
 }
 
+test_invalid_declared_owner_path_is_refused() {
+  local d status err; d=$(new_case invalid-owner-path)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" https://github.com/acme/widget.git
+  mkdir "$d/home/config/fork-owner"
+  err="$d/err.txt"
+  status=0
+  resolve "$d" 2>"$err" || status=$?
+  expect_code 1 "$status" "an invalid owner path must be refused"
+  assert_contains "$(cat "$err")" "exactly one" \
+    "an invalid owner path should explain the setting contract"
+  pass "invalid fork-owner paths are refused rather than treated as absent"
+}
+
 test_surrounding_whitespace_is_allowed() {
   local d out; d=$(new_case whitespace-owner)
   make_fakebin "$d" >/dev/null
@@ -323,6 +337,7 @@ test_encoded_ssh_credential_origin_is_refused
 test_missing_origin_resolves_to_nothing
 test_unusable_declared_owner_is_refused
 test_malformed_declared_owner_is_refused
+test_invalid_declared_owner_path_is_refused
 test_surrounding_whitespace_is_allowed
 test_init_passes_the_resolved_target_through
 test_init_without_a_fork_target_initializes_against_origin

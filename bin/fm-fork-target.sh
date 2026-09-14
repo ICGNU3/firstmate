@@ -102,7 +102,10 @@ url_swap_owner() {  # <url> <account>
 
 config_token() {  # <name>
   local path="$CONFIG/$1" value
-  [ -f "$path" ] && [ -r "$path" ] || return 1
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    return 1
+  fi
+  [ -f "$path" ] && [ -r "$path" ] || return 2
   value=$(awk '
     NR == 1 {
       sub(/^[[:space:]]+/, "")
