@@ -34,6 +34,7 @@ SH
 make_spawn_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_test_make_spawn_fakebin "$dir")
+  fm_test_fake_no_mistakes_init_doctor "$fakebin"
   cat > "$fakebin/timeout" <<'SH'
 #!/usr/bin/env bash
 shift
@@ -104,6 +105,20 @@ run_spawn() {
 # tests are about profile resolution, so they pass a fixed valid one.
 run_ship_spawn() {
   run_spawn "$@" --mode no-mistakes --yolo off
+}
+
+test_ship_spawn_refreshes_the_push_target_before_launch() {
+  local rec id out status
+  id=profile-refresh-target-z1e
+  rec=$(make_spawn_case profile-refresh-target claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "ship spawn should refresh the no-mistakes target"
+  assert_present "$PROJ_DIR/.no-mistakes-init" "ship spawn did not initialize the no-mistakes target"
+  assert_present "$PROJ_DIR/.no-mistakes-doctor" "ship spawn did not doctor the refreshed target"
+  pass "ship spawn refreshes an existing no-mistakes registration before launch"
 }
 
 read_case_record() {
@@ -1371,6 +1386,7 @@ test_non_claude_harness_ignores_claude_permission_mode() {
 }
 
 test_worker_launch_delivers_role_scope
+test_ship_spawn_refreshes_the_push_target_before_launch
 test_no_profile_keeps_claude_profile_defaults
 test_non_cursor_launch_clears_inherited_cursor_markers
 test_relative_home_overrides_launch_with_absolute_cross_process_paths

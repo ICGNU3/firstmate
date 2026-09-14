@@ -531,6 +531,7 @@ SEED_PARENT_BRIEF_CREATED=0
 SEED_PARENT_BRIEF_DIR_CREATED=0
 SEED_SUB_REG_EXISTED=0
 SEED_CHARTER_EXISTED=0
+SEED_FORK_OWNER_EXISTED=0
 SEED_MARKER_EXISTED=0
 SEED_PARENT_MARKER_EXISTED=0
 
@@ -655,6 +656,7 @@ seed_rollback() {
         restore_seed_file "$SEED_PARENT_MARKER_EXISTED" "$SEED_BACKUP_DIR/parent-marker" "$SEED_HOME/$SUB_HOME_PARENT_MARKER"
         restore_seed_file "$SEED_CHARTER_EXISTED" "$SEED_BACKUP_DIR/charter.md" "$SEED_HOME/data/charter.md"
         restore_seed_file "$SEED_SUB_REG_EXISTED" "$SEED_BACKUP_DIR/sub-projects.md" "$SEED_HOME/data/projects.md"
+        restore_seed_file "$SEED_FORK_OWNER_EXISTED" "$SEED_BACKUP_DIR/fork-owner" "$SEED_HOME/config/fork-owner"
       fi
     fi
   fi
@@ -866,6 +868,7 @@ seed_home() {
   SEED_PARENT_BRIEF_DIR_CREATED=0
   SEED_SUB_REG_EXISTED=0
   SEED_CHARTER_EXISTED=0
+  SEED_FORK_OWNER_EXISTED=0
   SEED_MARKER_EXISTED=0
   if [ -f "$REG" ]; then
     SEED_PARENT_REG_EXISTED=1
@@ -905,6 +908,10 @@ seed_home() {
   if [ -f "$home/data/charter.md" ]; then
     SEED_CHARTER_EXISTED=1
     cp "$home/data/charter.md" "$SEED_BACKUP_DIR/charter.md"
+  fi
+  if [ -f "$home/config/fork-owner" ]; then
+    SEED_FORK_OWNER_EXISTED=1
+    cp "$home/config/fork-owner" "$SEED_BACKUP_DIR/fork-owner"
   fi
   if [ -f "$home/$SUB_HOME_MARKER" ]; then
     SEED_MARKER_EXISTED=1

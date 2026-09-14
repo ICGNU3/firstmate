@@ -2544,6 +2544,10 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
         exit 1
       fi
     fi
+    if ! "$FM_ROOT/bin/fm-fork-target.sh" init "$PROJ_ABS"; then
+      echo "error: could not refresh no-mistakes push target for $PROJ_ABS" >&2
+      exit 1
+    fi
   fi
   # Use the existing launch-brief overlay for every worker kind, including
   # pre-scope briefs and relaunches. Charters never enter this worker path.

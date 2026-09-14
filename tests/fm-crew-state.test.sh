@@ -515,6 +515,22 @@ steps[9]{step,status,findings,duration_ms}:
 EOF
 }
 
+run_failed_push_without_validation() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: failed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  findings: none
+outcome: failed
+steps[3]{step,status,findings,duration_ms}:
+  push,failed,0,412
+  pr,pending,0,0
+  ci,pending,0,0
+EOF
+}
+
 run_ci_monitoring() {  # <branch>
   cat <<EOF
 run:
@@ -1096,6 +1112,20 @@ test_terminal_failed_push_reads_delivery_failure() {
   assert_contains "$out" "validation passed" "the label must say validation passed"
   assert_not_contains "$out" "run failed" "a delivery failure must not reuse the validation-failure string"
   pass "a run that only failed to push reads as a delivery failure, not a validation failure"
+}
+
+test_terminal_failed_push_without_validation_stays_plain_failed() {
+  reset_fakes
+  local d; d=$(new_case failed-push-no-validation)
+  make_repo_on_branch "$d/wt" fm/feat-push-no-validation
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-push-no-validation.meta" "window=fm:fm-feat-push-no-validation" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_failed_push_without_validation fm/feat-push-no-validation)"
+  local out; out=$(run_crew_state "$d" feat-push-no-validation)
+  assert_contains "$out" "state: failed" "a push failure without validation evidence stays failed"
+  assert_contains "$out" "run failed" "missing validation evidence keeps the plain failure string"
+  assert_not_contains "$out" "delivery failed" "missing validation evidence must not be labeled delivery"
+  pass "a delivery-shaped failure without validation evidence stays unclassified"
 }
 
 test_terminal_failed_validation_step_stays_plain_failed() {
@@ -2610,6 +2640,7 @@ test_terminal_failed_ci_orphan_status_only_reads_done
 test_terminal_failed_ci_genuine_red_stays_failed
 test_terminal_failed_ci_orphan_second_failed_step_stays_failed
 test_terminal_failed_push_reads_delivery_failure
+test_terminal_failed_push_without_validation_stays_plain_failed
 test_terminal_failed_validation_step_stays_plain_failed
 test_terminal_failed_ci_after_push_is_not_a_delivery_failure
 test_cross_branch_attribution_via_runs_list

@@ -401,6 +401,40 @@ nm_steps_rows() {
   '
 }
 
+NM_VALIDATION_STEPS="review test document lint"
+
+nm_validation_steps_complete() {
+  local rows row rest step status saw_review=0 saw_test=0 saw_document=0 saw_lint=0 expected
+  rows=$(nm_steps_rows)
+  [ -n "$rows" ] || return 1
+  while IFS= read -r row; do
+    row=$(trim "$row")
+    [ -n "$row" ] || continue
+    step=$(trim "${row%%,*}")
+    rest=${row#*,}
+    status=$(strip_quotes "$(trim "${rest%%,*}")")
+    [ "$status" = completed ] || continue
+    case "$step" in
+      review) saw_review=1 ;;
+      test) saw_test=1 ;;
+      document) saw_document=1 ;;
+      lint) saw_lint=1 ;;
+    esac
+  done <<EOF
+$rows
+EOF
+  for expected in $NM_VALIDATION_STEPS; do
+    case "$expected" in
+      review) [ "$saw_review" = 1 ] || return 1 ;;
+      test) [ "$saw_test" = 1 ] || return 1 ;;
+      document) [ "$saw_document" = 1 ] || return 1 ;;
+      lint) [ "$saw_lint" = 1 ] || return 1 ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+
 # 0 when the pipeline itself reports RECENT activity on an actively running or
 # fixing step. The client prefixes a step's `last_activity` with `quiet` once no
 # step log or native-agent lifecycle event has arrived for longer than its
@@ -427,6 +461,7 @@ nm_run_activity_is_recent() {
 # authority - is green and every substantive step completed.
 nm_failed_run_is_green_held_ci() {
   local rows row rest step status saw_ci_failed
+  nm_validation_steps_complete || return 1
   rows=$(nm_steps_rows)
   [ -n "$rows" ] || return 1
   saw_ci_failed=0
@@ -499,6 +534,7 @@ nm_step_is_delivery() {  # <step>
 nm_failed_run_is_delivery_failure() {
   local rows row rest step status seen_failure=0
   NM_DELIVERY_FAILED_STEP=""
+  nm_validation_steps_complete || return 1
   rows=$(nm_steps_rows)
   [ -n "$rows" ] || return 1
   while IFS= read -r row; do
