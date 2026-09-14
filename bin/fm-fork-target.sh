@@ -79,6 +79,13 @@ url_repo() {  # <url>
   printf '%s' "$repo"
 }
 
+url_is_forge_remote() {  # <url>
+  case "${1:-}" in
+    https://*|http://*|ssh://*|git://*|*@*:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # <url> with its owner segment replaced by <account>, preserving the scheme,
 # host, separator, and `.git` suffix exactly as origin spelled them.
 url_swap_owner() {  # <url> <account>
@@ -185,12 +192,12 @@ resolve_fork_url() {  # <dir>
   [ -n "$origin" ] || return 0
   url_has_credentials "$origin" \
     && die "origin URL contains credentials; refusing push-target resolution"
-  owner=$(url_owner "$origin") || return 0
-  repo=$(url_repo "$origin") || return 0
 
   if declared=$(config_token fork-owner); then
     account_safe "$declared" \
       || die "config/fork-owner is not a usable forge account: $declared"
+    url_is_forge_remote "$origin" || return 0
+    owner=$(url_owner "$origin") || return 0
     [ "$declared" != "$owner" ] || return 0
     url_swap_owner "$origin" "$declared" || return 0
     return 0
@@ -199,6 +206,9 @@ resolve_fork_url() {  # <dir>
     [ "$config_status" -eq 1 ] \
       || die "config/fork-owner must contain exactly one nonempty forge account token"
   fi
+
+  owner=$(url_owner "$origin") || return 0
+  repo=$(url_repo "$origin") || return 0
 
   # `gh` speaks only to GitHub, so an origin that does not name a GitHub host
   # has no account this credential could own a fork under. Declared

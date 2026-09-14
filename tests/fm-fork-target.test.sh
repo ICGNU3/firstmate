@@ -281,6 +281,25 @@ test_init_without_a_fork_target_initializes_against_origin() {
   pass "init falls back to the unchanged origin initialization"
 }
 
+test_declared_owner_does_not_rewrite_local_origin() {
+  local d status; d=$(new_case local-declared-owner)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" "$d/upstream.git"
+  printf 'contributor\n' > "$d/home/config/fork-owner"
+  status=0
+  FM_TEST_GH_LOG="$d/gh.log" FM_TEST_NM_LOG="$d/nm.log" \
+    PATH="$d/fakebin:$PATH" FM_HOME="$d/home" \
+    "$FORK_TARGET" init "$d/repo" >/dev/null || status=$?
+  expect_code 0 "$status" "local origin with a declared owner should initialize"
+  assert_contains "$(cat "$d/nm.log")" "init" \
+    "local origin should use plain no-mistakes init"
+  assert_not_contains "$(cat "$d/nm.log")" "--fork-url" \
+    "local origin must not receive a derived fork url"
+  assert_equals "$d/upstream.git" "$(git -C "$d/repo" remote get-url origin)" \
+    "local origin changed"
+  pass "declared fork owners do not rewrite local origins"
+}
+
 test_usage_error_exits_2() {
   local status=0
   "$FORK_TARGET" >/dev/null 2>&1 || status=$?
@@ -307,4 +326,5 @@ test_malformed_declared_owner_is_refused
 test_surrounding_whitespace_is_allowed
 test_init_passes_the_resolved_target_through
 test_init_without_a_fork_target_initializes_against_origin
+test_declared_owner_does_not_rewrite_local_origin
 test_usage_error_exits_2
