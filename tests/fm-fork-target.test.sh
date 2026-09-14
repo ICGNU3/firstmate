@@ -47,7 +47,12 @@ set -u
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-}" in
   api)  printf '%s\n' "${FM_TEST_GH_LOGIN:-}" ;;
-  repo) case " ${FM_TEST_GH_FORKS:-} " in *" ${3:-} "*) exit 0 ;; *) exit 1 ;; esac ;;
+  repo)
+    case " ${FM_TEST_GH_FORKS:-} " in
+      *" ${3:-} "*) printf 'true\t%s\n' "${FM_TEST_GH_PARENT:-acme/widget}"; exit 0 ;;
+      *) exit 1 ;;
+    esac
+    ;;
 esac
 SH
   chmod +x "$fb/gh"
@@ -112,13 +117,23 @@ test_authenticated_account_with_a_fork_is_used() {
   local d out; d=$(new_case gh-fork)
   make_fakebin "$d" >/dev/null
   set_origin "$d" https://github.com/acme/widget.git
-  export FM_TEST_GH_LOGIN=contributor FM_TEST_GH_FORKS="contributor/widget"
+  export FM_TEST_GH_LOGIN=contributor FM_TEST_GH_FORKS="contributor/widget" FM_TEST_GH_PARENT=acme/widget
   out=$(resolve "$d")
   assert_equals "https://github.com/contributor/widget.git" "$out" \
     "an authenticated account holding a fork must become the push target"
   assert_contains "$(cat "$d/gh.log")" "repo view contributor/widget" \
     "the fork must be proved to exist before it is used"
   pass "with no config the authenticated account is used once its fork is proved"
+}
+
+test_same_named_unrelated_repository_is_not_used() {
+  local d out; d=$(new_case gh-unrelated)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" https://github.com/acme/widget.git
+  export FM_TEST_GH_LOGIN=contributor FM_TEST_GH_FORKS="contributor/widget" FM_TEST_GH_PARENT=other/source
+  out=$(resolve "$d")
+  assert_equals "" "$out" "an unrelated same-named repository must not become the push target"
+  pass "a same-named repository is rejected when its parent is not this origin"
 }
 
 test_authenticated_account_without_a_fork_resolves_to_nothing() {
@@ -149,6 +164,10 @@ test_non_github_origin_never_reaches_the_api() {
   out=$(resolve "$d")
   assert_equals "" "$out" "a non-GitHub origin has no gh-derived fork"
   [ ! -s "$d/gh.log" ] || fail "a non-GitHub origin must not reach the gh api"$'\n'"$(cat "$d/gh.log")"
+  set_origin "$d" https://evilgithub.com/acme/bare.git
+  out=$(resolve "$d")
+  assert_equals "" "$out" "a host containing github.com must not reach the gh-derived fork path"
+  [ ! -s "$d/gh.log" ] || fail "a non-GitHub host must not reach the gh api"$'\n'"$(cat "$d/gh.log")"
   pass "a non-GitHub origin resolves to nothing without an api call"
 }
 
@@ -172,6 +191,34 @@ test_unusable_declared_owner_is_refused() {
   expect_code 1 "$status" "an unusable declared owner must be refused"
   assert_contains "$(cat "$err")" "fork-owner" "the refusal must name the setting"
   pass "an unusable config/fork-owner is refused rather than interpolated"
+}
+
+test_malformed_declared_owner_is_refused() {
+  local d status err; d=$(new_case malformed-owner)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" https://github.com/acme/widget.git
+  err="$d/err.txt"
+  printf 'contributor other\n' > "$d/home/config/fork-owner"
+  status=0
+  resolve "$d" 2>"$err" || status=$?
+  expect_code 1 "$status" "multiple tokens must be refused"
+  assert_contains "$(cat "$err")" "exactly one" "the malformed declaration should explain its shape"
+  printf 'contributor\nsecond-line\n' > "$d/home/config/fork-owner"
+  status=0
+  resolve "$d" 2>"$err" || status=$?
+  expect_code 1 "$status" "extra lines must be refused"
+  pass "fork-owner rejects internal whitespace and extra lines"
+}
+
+test_surrounding_whitespace_is_allowed() {
+  local d out; d=$(new_case whitespace-owner)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" https://github.com/acme/widget.git
+  printf '  contributor  \n' > "$d/home/config/fork-owner"
+  out=$(resolve "$d")
+  assert_equals "https://github.com/contributor/widget.git" "$out" \
+    "surrounding whitespace should not alter a valid fork owner"
+  pass "fork-owner accepts surrounding whitespace without collapsing tokens"
 }
 
 test_init_passes_the_resolved_target_through() {
@@ -220,11 +267,14 @@ test_declared_owner_wins
 test_declared_owner_matching_origin_resolves_to_nothing
 test_ssh_and_suffixless_origins_keep_their_spelling
 test_authenticated_account_with_a_fork_is_used
+test_same_named_unrelated_repository_is_not_used
 test_authenticated_account_without_a_fork_resolves_to_nothing
 test_authenticated_account_owning_origin_resolves_to_nothing
 test_non_github_origin_never_reaches_the_api
 test_missing_origin_resolves_to_nothing
 test_unusable_declared_owner_is_refused
+test_malformed_declared_owner_is_refused
+test_surrounding_whitespace_is_allowed
 test_init_passes_the_resolved_target_through
 test_init_without_a_fork_target_initializes_against_origin
 test_usage_error_exits_2

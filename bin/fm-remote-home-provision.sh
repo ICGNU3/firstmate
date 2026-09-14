@@ -5,8 +5,9 @@
 #   fm-remote-home-provision.sh < manifest
 #
 # Manifest schema fm-remote-home-provision.v1 carries a base64 charter, the
-# base64 parent SSH alias, and one base64 project record per line. Each project
-# record's origin is the URL the parent resolved and named, so this host clones
+# base64 parent SSH alias, the inherited fork-owner setting, and one base64
+# project record per line. Each project record's origin is the URL the parent
+# resolved and named, so this host clones
 # from it and re-validates it through bin/fm-project-origin-lib.sh instead of
 # trusting the sender. The remote code root is cloned into an absent home,
 # project origins are cloned on this host, the project registry and charter are
@@ -80,6 +81,7 @@ rollback() {
       done < "$CREATED_PROJECTS"
       restore_owned_file data/charter.md || true
       restore_owned_file data/projects.md || true
+      restore_owned_file config/fork-owner || true
       restore_owned_file .fm-secondmate-home || true
       restore_owned_file .fm-secondmate-parent || true
       [ "$CREATED_BACKLOG" -eq 0 ] || rm -f -- "$FM_HOME/data/backlog.md"
@@ -102,6 +104,10 @@ CHARTER_B64=$(manifest_value "$TMP/manifest" charter_b64 || true)
 # field) still provisions; the durable parent record below simply omits the
 # host in that case rather than refusing the whole seed.
 PARENT_HOST_B64=$(manifest_value "$TMP/manifest" parent_host_b64 || true)
+[ "$(grep -c '^fork_owner_b64=' "$TMP/manifest" 2>/dev/null || true)" -le 1 ] \
+  || die "provisioning manifest has duplicate fork-owner fields"
+FORK_OWNER_FIELD_COUNT=$(grep -c '^fork_owner_b64=' "$TMP/manifest" 2>/dev/null || true)
+FORK_OWNER_B64=$(manifest_value "$TMP/manifest" fork_owner_b64 || true)
 COUNT=$(manifest_value "$TMP/manifest" project_count || true)
 base64_decode_to "$ID_B64" "$TMP/id" || die "manifest id is not valid base64"
 base64_decode_to "$CHARTER_B64" "$TMP/charter" || die "manifest charter is not valid base64"
@@ -157,7 +163,7 @@ if [ -e "$FM_HOME" ] || [ -L "$FM_HOME" ]; then
     fi
   done
   mkdir -p "$TMP/before/data"
-  for rel in data/charter.md data/projects.md .fm-secondmate-home .fm-secondmate-parent; do
+  for rel in data/charter.md data/projects.md config/fork-owner .fm-secondmate-home .fm-secondmate-parent; do
     existing="$FM_HOME/$rel"
     if [ -e "$existing" ] || [ -L "$existing" ]; then
       [ -f "$existing" ] && [ ! -L "$existing" ] || die "existing remote home has unsafe owned file: $rel"
@@ -191,6 +197,21 @@ if [ -e "$FM_HOME/data/backlog.md" ] || [ -L "$FM_HOME/data/backlog.md" ]; then
 else
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$FM_HOME/data/backlog.md"
   CREATED_BACKLOG=1
+fi
+
+if [ "$FORK_OWNER_FIELD_COUNT" -eq 1 ]; then
+  if [ -n "$FORK_OWNER_B64" ]; then
+    base64_decode_to "$FORK_OWNER_B64" "$TMP/fork-owner" \
+      || die "manifest fork owner is not valid base64"
+    [ -z "$(LC_ALL=C tr -cd '\000' < "$TMP/fork-owner")" ] \
+      || die "manifest fork owner contains NUL bytes"
+    cp "$TMP/fork-owner" "$FM_HOME/config/fork-owner.tmp.$$" \
+      || die "cannot stage remote fork owner"
+    chmod 600 "$FM_HOME/config/fork-owner.tmp.$$"
+    mv -f -- "$FM_HOME/config/fork-owner.tmp.$$" "$FM_HOME/config/fork-owner"
+  else
+    rm -f -- "$FM_HOME/config/fork-owner"
+  fi
 fi
 
 PROJECT_REG="$TMP/projects.md"

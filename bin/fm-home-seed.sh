@@ -35,6 +35,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -49,6 +50,8 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-secondmate-charter-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-config-inherit-lib.sh
+. "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 
 usage() {
   echo "usage: fm-home-seed.sh <id> <home|-> {<project>...|--no-projects}" >&2
@@ -722,6 +725,19 @@ initialize_no_mistakes_project() {
     echo "error: no-mistakes command not found; cannot initialize $project in $home" >&2
     return 1
   }
+  if ! FM_INHERITABLE_CONFIG=fork-owner \
+    propagate_inheritable_config "$CONFIG" "$home/config"; then
+    echo "error: failed to inherit fork-owner before initializing $project in $home" >&2
+    return 1
+  fi
+  if [ -f "$CONFIG/fork-owner" ] && ! cmp -s "$CONFIG/fork-owner" "$home/config/fork-owner"; then
+    echo "error: fork-owner was not inherited before initializing $project in $home" >&2
+    return 1
+  fi
+  if [ ! -e "$CONFIG/fork-owner" ] && [ -e "$home/config/fork-owner" ]; then
+    echo "error: stale fork-owner remained before initializing $project in $home" >&2
+    return 1
+  fi
   FM_HOME="$home" "$SCRIPT_DIR/fm-fork-target.sh" init "$dst" >/dev/null || {
     echo "error: failed to initialize no-mistakes for $project at $dst" >&2
     return 1

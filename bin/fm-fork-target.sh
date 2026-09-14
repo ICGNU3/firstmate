@@ -93,13 +93,46 @@ url_swap_owner() {  # <url> <account>
   printf '%s%s/%s' "$head" "$account" "${url##*/}"
 }
 
-# First non-empty line of a one-token config file, trimmed.
 config_token() {  # <name>
   local path="$CONFIG/$1" value
   [ -f "$path" ] && [ -r "$path" ] || return 1
-  value=$(sed -n '1p' "$path" 2>/dev/null | tr -d '[:space:]')
-  [ -n "$value" ] || return 1
+  value=$(awk '
+    NR == 1 {
+      sub(/^[[:space:]]+/, "")
+      sub(/[[:space:]]+$/, "")
+      if ($0 == "" || $0 ~ /[[:space:]]/) exit 2
+      print
+      next
+    }
+    { exit 2 }
+    END { if (NR != 1) exit 2 }
+  ' "$path" 2>/dev/null) || return 2
   printf '%s' "$value"
+}
+
+url_host() {  # <url>
+  local url=${1:-} rest authority host
+  case "$url" in
+    https://*|http://*|ssh://*|git://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      [ "$authority" != "$rest" ] || return 1
+      authority=${authority##*@}
+      case "$authority" in
+        \[*\]*) host=${authority%%]*}; host=${host#\[} ;;
+        *:*) host=${authority%%:*} ;;
+        *) host=$authority ;;
+      esac
+      ;;
+    *://*) return 1 ;;
+    *@*:*|[A-Za-z0-9._-]*:*)
+      rest=${url#*@}
+      host=${rest%%:*}
+      ;;
+    *) return 1 ;;
+  esac
+  [ -n "$host" ] || return 1
+  printf '%s' "$host"
 }
 
 # The account `gh` is authenticated as, or nothing. Read-only, fails open.
@@ -108,15 +141,18 @@ gh_login() {
   gh api user -q .login 2>/dev/null | tr -d '[:space:]'
 }
 
-# 0 when <account> already holds a fork named <repo> that this credential can
-# see. The proof is required before a derived url is used at all.
-gh_fork_exists() {  # <account> <repo>
+gh_fork_exists() {  # <account> <repo> <parent-owner> <parent-repo>
+  local metadata expected
   command -v gh >/dev/null 2>&1 || return 1
-  gh repo view "$1/$2" --json name >/dev/null 2>&1
+  metadata=$(gh repo view "$1/$2" --json isFork,parent \
+    --jq '[.isFork, (.parent.nameWithOwner // "")] | @tsv' 2>/dev/null) || return 1
+  metadata=$(printf '%s' "$metadata" | tr '[:upper:]' '[:lower:]')
+  expected=$(printf 'true\t%s/%s' "$3" "$4" | tr '[:upper:]' '[:lower:]')
+  [ "$metadata" = "$expected" ]
 }
 
 resolve_fork_url() {  # <dir>
-  local dir=$1 origin owner repo declared login
+  local dir=$1 origin owner repo declared login config_status host
   origin=$(git -C "$dir" remote get-url origin 2>/dev/null) || return 0
   [ -n "$origin" ] || return 0
   owner=$(url_owner "$origin") || return 0
@@ -128,20 +164,23 @@ resolve_fork_url() {  # <dir>
     [ "$declared" != "$owner" ] || return 0
     url_swap_owner "$origin" "$declared" || return 0
     return 0
+  else
+    config_status=$?
+    [ "$config_status" -eq 1 ] \
+      || die "config/fork-owner must contain exactly one nonempty forge account token"
   fi
 
   # `gh` speaks only to GitHub, so an origin that does not name a GitHub host
   # has no account this credential could own a fork under. Declared
   # config/fork-owner above stays host-agnostic; only this derived path is
   # gated, which also keeps a local or non-forge origin from reaching the api.
-  case "$origin" in
-    *github.com[:/]*) ;;
-    *) return 0 ;;
-  esac
+  host=$(url_host "$origin") || return 0
+  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+  [ "$host" = github.com ] || return 0
   login=$(gh_login) || return 0
   account_safe "$login" || return 0
   [ "$login" != "$owner" ] || return 0
-  gh_fork_exists "$login" "$repo" || return 0
+  gh_fork_exists "$login" "$repo" "$owner" "$repo" || return 0
   url_swap_owner "$origin" "$login" || return 0
 }
 

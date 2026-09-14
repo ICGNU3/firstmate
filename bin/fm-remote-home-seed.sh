@@ -27,6 +27,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -43,6 +44,8 @@ MAX_MANIFEST_BYTES=1048576
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-project-origin-lib.sh
 . "$SCRIPT_DIR/fm-project-origin-lib.sh"
+# shellcheck source=bin/fm-config-inherit-lib.sh
+. "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -146,6 +149,15 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-home-seed.XXXXXX") || die "cannot cre
 REG_EXISTED=0
 [ -f "$REG" ] && { cp "$REG" "$TMP/registry.before"; REG_EXISTED=1; }
 
+FORK_OWNER_PRESENT=$(fm_config_source_present "$CONFIG/fork-owner") \
+  || die "cannot inspect config/fork-owner"
+FORK_OWNER_B64=
+if [ "$FORK_OWNER_PRESENT" = 1 ]; then
+  [ -f "$CONFIG/fork-owner" ] && [ ! -L "$CONFIG/fork-owner" ] \
+    || die "config/fork-owner is not a regular file"
+  FORK_OWNER_B64=$(encode < "$CONFIG/fork-owner")
+fi
+
 # Keep the parent charter as its durable source, but publish a remote copy whose
 # status path is the remote append-only relay log rather than a local Mac path.
 PARENT_STATUS="$STATE/$ID.status"
@@ -200,6 +212,7 @@ done
   # back; the parent's real filesystem path is never sent, since it names
   # nothing on the remote filesystem.
   printf 'parent_host_b64=%s\n' "$(printf '%s' "$HOST" | encode)"
+  printf 'fork_owner_b64=%s\n' "$FORK_OWNER_B64"
   printf 'project_count=%s\n' "${#PROJECT_NAMES[@]}"
   cat "$TMP/project.records"
 } > "$TMP/manifest"
