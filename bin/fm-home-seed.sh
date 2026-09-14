@@ -290,7 +290,7 @@ validate_operational_dirs() {
 validate_seed_leaf_files() {
   local home=$1 label path abs_home abs_path
   abs_home=$(resolved_path "$home")
-  for label in "data/projects.md" "data/charter.md" "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
+  for label in "data/projects.md" "data/charter.md" "config/fork-owner" "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
     path="$home/$label"
     if [ -L "$path" ]; then
       echo "error: secondmate leaf file must not be a symlink: $path" >&2

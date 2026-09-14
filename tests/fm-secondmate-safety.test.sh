@@ -1269,7 +1269,7 @@ test_home_seed_refuses_unsafe_leaf_files() {
   printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
   scaffold_secondmate_charter "$home" design 'design domain' alpha || fail "charter scaffold failed for symlink leaf seed test"
 
-  for leaf in data/projects.md data/charter.md .fm-secondmate-home .fm-secondmate-parent; do
+  for leaf in data/projects.md data/charter.md config/fork-owner .fm-secondmate-home .fm-secondmate-parent; do
     subhome="$TMP_ROOT/symlink-leaf-subhome-${leaf//\//-}"
     sink="$home/data/symlink-leaf-${leaf//\//-}"
     rm -rf "$subhome" "$sink"

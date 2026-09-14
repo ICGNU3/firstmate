@@ -111,7 +111,7 @@ config_token() {  # <name>
 }
 
 url_has_credentials() {  # <url>
-  local url=${1:-} rest authority
+  local url=${1:-} rest authority user
   case "$url" in
     https://*|http://*|git://*)
       rest=${url#*://}
@@ -121,7 +121,18 @@ url_has_credentials() {  # <url>
     ssh://*)
       rest=${url#*://}
       authority=${rest%%/*}
-      case "$authority" in *:*@*) return 0 ;; esac
+      case "$authority" in
+        *@*)
+          user=${authority%@*}
+          user=$(printf '%s' "$user" | tr '[:upper:]' '[:lower:]')
+          case "$user" in *:*|*%3a*) return 0 ;; esac
+          ;;
+      esac
+      ;;
+    *@*:*)
+      user=${url%%@*}
+      user=$(printf '%s' "$user" | tr '[:upper:]' '[:lower:]')
+      case "$user" in *:*|*%3a*) return 0 ;; esac
       ;;
   esac
   return 1
