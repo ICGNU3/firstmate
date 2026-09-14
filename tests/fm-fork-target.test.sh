@@ -171,6 +171,20 @@ test_non_github_origin_never_reaches_the_api() {
   pass "a non-GitHub origin resolves to nothing without an api call"
 }
 
+test_credential_bearing_origin_is_refused() {
+  local d status err; d=$(new_case credential-origin)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" https://user:token@github.com/acme/widget.git
+  err="$d/err.txt"
+  status=0
+  resolve "$d" 2>"$err" || status=$?
+  expect_code 1 "$status" "credential-bearing origins must be refused"
+  assert_contains "$(cat "$err")" "credentials" "the refusal should identify the unsafe URL shape"
+  assert_not_contains "$(cat "$err")" "token" "the credential must not appear in diagnostics"
+  [ ! -s "$d/gh.log" ] || fail "credential-bearing origins must not reach the gh api"
+  pass "credential-bearing origins are refused before target construction"
+}
+
 test_missing_origin_resolves_to_nothing() {
   local d out; d=$(new_case no-origin)
   make_fakebin "$d" >/dev/null
@@ -271,6 +285,7 @@ test_same_named_unrelated_repository_is_not_used
 test_authenticated_account_without_a_fork_resolves_to_nothing
 test_authenticated_account_owning_origin_resolves_to_nothing
 test_non_github_origin_never_reaches_the_api
+test_credential_bearing_origin_is_refused
 test_missing_origin_resolves_to_nothing
 test_unusable_declared_owner_is_refused
 test_malformed_declared_owner_is_refused

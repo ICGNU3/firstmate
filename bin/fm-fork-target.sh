@@ -110,6 +110,23 @@ config_token() {  # <name>
   printf '%s' "$value"
 }
 
+url_has_credentials() {  # <url>
+  local url=${1:-} rest authority
+  case "$url" in
+    https://*|http://*|git://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      case "$authority" in *@*) return 0 ;; esac
+      ;;
+    ssh://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      case "$authority" in *:*@*) return 0 ;; esac
+      ;;
+  esac
+  return 1
+}
+
 url_host() {  # <url>
   local url=${1:-} rest authority host
   case "$url" in
@@ -155,6 +172,8 @@ resolve_fork_url() {  # <dir>
   local dir=$1 origin owner repo declared login config_status host
   origin=$(git -C "$dir" remote get-url origin 2>/dev/null) || return 0
   [ -n "$origin" ] || return 0
+  url_has_credentials "$origin" \
+    && die "origin URL contains credentials; refusing push-target resolution"
   owner=$(url_owner "$origin") || return 0
   repo=$(url_repo "$origin") || return 0
 
