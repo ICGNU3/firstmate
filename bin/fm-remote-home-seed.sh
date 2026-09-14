@@ -212,7 +212,10 @@ done
   # back; the parent's real filesystem path is never sent, since it names
   # nothing on the remote filesystem.
   printf 'parent_host_b64=%s\n' "$(printf '%s' "$HOST" | encode)"
-  printf 'fork_owner_b64=%s\n' "$FORK_OWNER_B64"
+  if [ "$FORK_OWNER_PRESENT" = 1 ]; then
+    printf 'fork_owner_present=1\n'
+    printf 'fork_owner_b64=%s\n' "$FORK_OWNER_B64"
+  fi
   printf 'project_count=%s\n' "${#PROJECT_NAMES[@]}"
   cat "$TMP/project.records"
 } > "$TMP/manifest"

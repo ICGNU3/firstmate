@@ -110,6 +110,7 @@ resolve_directory_input() {
 
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME=$(resolve_directory_input FM_HOME "${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}") || exit 1
+FM_HOME_Q=$(printf '%q' "$FM_HOME")
 if [ -n "${FM_DATA_OVERRIDE:-}" ]; then
   DATA=$(resolve_directory_input FM_DATA_OVERRIDE "$FM_DATA_OVERRIDE") || exit 1
 else
@@ -441,11 +442,11 @@ case "$MODE" in
     ;;
   *)  # no-mistakes
     SETUP2="
-2. Before starting no-mistakes, run \`$FM_ROOT/bin/fm-fork-target.sh init .\` - it refreshes the gate against the push target this home can actually write, including when the gate was already initialized."
+2. Before starting no-mistakes, run \`FM_HOME=$FM_HOME_Q $FM_ROOT/bin/fm-fork-target.sh init .\` - it refreshes the gate against the push target this home can actually write, including when the gate was already initialized."
     ;;
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID") || exit 1
-DOD=$(fm_dod_block "$MODE" "$ID") || exit 1
+DOD=$(fm_dod_block "$MODE" "$ID" "$FM_HOME") || exit 1
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.

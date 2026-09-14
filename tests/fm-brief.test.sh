@@ -195,9 +195,10 @@ EOF
 # one of these DOD blocks, since a broken heredoc corrupts or empties the
 # generated brief content, not just the script's own syntax.
 test_ship_modes_generate_clean_briefs() {
-  local home id mode brief status
+  local home id mode brief status home_q
   home="$TMP_ROOT/ship-home"
   write_registry "$home"
+  home_q=$(printf '%q' "$home")
 
   for id_mode in "brief-nomistakes-a1:no-mistakes" "brief-directpr-a2:direct-PR" "brief-localonly-a3:local-only"; do
     id=${id_mode%%:*}
@@ -214,8 +215,11 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "## Captain's intent" "$brief" "$id: brief missing Captain's intent subsection"
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
     if [ "$mode" = no-mistakes ]; then
-      assert_grep "fm-fork-target.sh init ." "$brief" \
+      assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh init ." "$brief" \
         "$id: no-mistakes brief must refresh the push target before starting the gate"
+    elif [ "$mode" = direct-PR ]; then
+      assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh resolve ." "$brief" \
+        "$id: direct-PR brief must resolve the push target from its effective home"
     fi
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
@@ -732,6 +736,17 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   expect_code 1 "$status" "an unresolved relative FM_HOME must fail"
   assert_grep "FM_HOME directory cannot be resolved: missing-home" "$err" \
     "unresolved relative FM_HOME did not fail loudly"
+
+  (
+    cd "$root" || exit 1
+    FM_HOME=missing-home \
+      "$ROOT/bin/fm-brief.sh" unresolved-ship --mode no-mistakes some-proj >/dev/null 2>"$err"
+  ); status=$?
+  expect_code 1 "$status" "an unresolved ship FM_HOME must fail before rendering a resolver command"
+  assert_absent "$root/data/unresolved-ship/brief.md" \
+    "an unresolved ship FM_HOME emitted a brief with an ambiguous resolver home"
+  assert_grep "FM_HOME directory cannot be resolved: missing-home" "$err" \
+    "unresolved ship FM_HOME did not fail loudly"
 
   (
     cd "$root" || exit 1

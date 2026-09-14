@@ -5,7 +5,7 @@
 #   fm-remote-home-provision.sh < manifest
 #
 # Manifest schema fm-remote-home-provision.v1 carries a base64 charter, the
-# base64 parent SSH alias, the inherited fork-owner setting, and one base64
+# base64 parent SSH alias, an optional inherited fork-owner setting, and one base64
 # project record per line. Each project record's origin is the URL the parent
 # resolved and named, so this host clones
 # from it and re-validates it through bin/fm-project-origin-lib.sh instead of
@@ -104,10 +104,21 @@ CHARTER_B64=$(manifest_value "$TMP/manifest" charter_b64 || true)
 # field) still provisions; the durable parent record below simply omits the
 # host in that case rather than refusing the whole seed.
 PARENT_HOST_B64=$(manifest_value "$TMP/manifest" parent_host_b64 || true)
+[ "$(grep -c '^fork_owner_present=' "$TMP/manifest" 2>/dev/null || true)" -le 1 ] \
+  || die "provisioning manifest has duplicate fork-owner presence fields"
 [ "$(grep -c '^fork_owner_b64=' "$TMP/manifest" 2>/dev/null || true)" -le 1 ] \
   || die "provisioning manifest has duplicate fork-owner fields"
+FORK_OWNER_PRESENT_FIELD_COUNT=$(grep -c '^fork_owner_present=' "$TMP/manifest" 2>/dev/null || true)
 FORK_OWNER_FIELD_COUNT=$(grep -c '^fork_owner_b64=' "$TMP/manifest" 2>/dev/null || true)
+FORK_OWNER_PRESENT=
 FORK_OWNER_B64=$(manifest_value "$TMP/manifest" fork_owner_b64 || true)
+if [ "$FORK_OWNER_PRESENT_FIELD_COUNT" -eq 1 ]; then
+  FORK_OWNER_PRESENT=$(manifest_value "$TMP/manifest" fork_owner_present || true)
+  [ "$FORK_OWNER_PRESENT" = 1 ] || die "manifest fork-owner presence is invalid"
+  [ "$FORK_OWNER_FIELD_COUNT" -eq 1 ] || die "manifest fork-owner payload is missing"
+elif [ "$FORK_OWNER_FIELD_COUNT" -ne 0 ]; then
+  die "manifest fork-owner presence marker is missing"
+fi
 COUNT=$(manifest_value "$TMP/manifest" project_count || true)
 base64_decode_to "$ID_B64" "$TMP/id" || die "manifest id is not valid base64"
 base64_decode_to "$CHARTER_B64" "$TMP/charter" || die "manifest charter is not valid base64"
@@ -199,19 +210,15 @@ else
   CREATED_BACKLOG=1
 fi
 
-if [ "$FORK_OWNER_FIELD_COUNT" -eq 1 ]; then
-  if [ -n "$FORK_OWNER_B64" ]; then
-    base64_decode_to "$FORK_OWNER_B64" "$TMP/fork-owner" \
-      || die "manifest fork owner is not valid base64"
-    [ -z "$(LC_ALL=C tr -cd '\000' < "$TMP/fork-owner")" ] \
-      || die "manifest fork owner contains NUL bytes"
-    cp "$TMP/fork-owner" "$FM_HOME/config/fork-owner.tmp.$$" \
-      || die "cannot stage remote fork owner"
-    chmod 600 "$FM_HOME/config/fork-owner.tmp.$$"
-    mv -f -- "$FM_HOME/config/fork-owner.tmp.$$" "$FM_HOME/config/fork-owner"
-  else
-    rm -f -- "$FM_HOME/config/fork-owner"
-  fi
+if [ "$FORK_OWNER_PRESENT_FIELD_COUNT" -eq 1 ]; then
+  base64_decode_to "$FORK_OWNER_B64" "$TMP/fork-owner" \
+    || die "manifest fork owner is not valid base64"
+  [ -z "$(LC_ALL=C tr -cd '\000' < "$TMP/fork-owner")" ] \
+    || die "manifest fork owner contains NUL bytes"
+  cp "$TMP/fork-owner" "$FM_HOME/config/fork-owner.tmp.$$" \
+    || die "cannot stage remote fork owner"
+  chmod 600 "$FM_HOME/config/fork-owner.tmp.$$"
+  mv -f -- "$FM_HOME/config/fork-owner.tmp.$$" "$FM_HOME/config/fork-owner"
 fi
 
 PROJECT_REG="$TMP/projects.md"
