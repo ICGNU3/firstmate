@@ -46,11 +46,17 @@ make_fakebin() {  # <case-dir> -> echoes fakebin path
 set -u
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-}" in
-  api)  printf '%s\n' "${FM_TEST_GH_LOGIN:-}" ;;
+  api)
+    [ "${FM_TEST_GH_API_FAIL:-0}" = 0 ] || {
+      printf 'temporary GitHub failure\n' >&2
+      exit 1
+    }
+    printf '%s\n' "${FM_TEST_GH_LOGIN:-}"
+    ;;
   repo)
     case " ${FM_TEST_GH_FORKS:-} " in
       *" ${3:-} "*) printf 'true\t%s\n' "${FM_TEST_GH_PARENT:-acme/widget}"; exit 0 ;;
-      *) exit 1 ;;
+      *) printf 'Could not resolve to a Repository\n' >&2; exit 1 ;;
     esac
     ;;
 esac
@@ -60,6 +66,9 @@ SH
 #!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "$FM_TEST_NM_LOG"
+if [ "${1:-}" = status ] && [ -n "${FM_TEST_NM_STATUS:-}" ]; then
+  printf '%s\n' "$FM_TEST_NM_STATUS"
+fi
 SH
   chmod +x "$fb/no-mistakes"
   printf '%s\n' "$fb"
@@ -200,10 +209,13 @@ test_encoded_ssh_credential_origin_is_refused() {
 }
 
 test_missing_origin_resolves_to_nothing() {
-  local d out; d=$(new_case no-origin)
+  local d out status; d=$(new_case no-origin)
   make_fakebin "$d" >/dev/null
   export FM_TEST_GH_LOGIN=contributor FM_TEST_GH_FORKS="contributor/widget"
+  status=0
   out=$(resolve "$d")
+  status=$?
+  expect_code 0 "$status" "a clone with no origin should be a positive no-target result"
   assert_equals "" "$out" "a clone with no origin has no derivable fork"
   pass "a clone with no origin resolves to nothing"
 }
@@ -295,6 +307,29 @@ test_init_without_a_fork_target_initializes_against_origin() {
   pass "init falls back to the unchanged origin initialization"
 }
 
+test_init_preserves_existing_registration_on_gh_failure() {
+  local d status err; d=$(new_case init-preserve)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" https://github.com/acme/widget.git
+  err="$d/err.txt"
+  status=0
+  FM_TEST_GH_LOGIN=contributor FM_TEST_GH_API_FAIL=1 \
+  FM_TEST_GH_LOG="$d/gh.log" FM_TEST_NM_LOG="$d/nm.log" \
+  FM_TEST_NM_STATUS='fork: https://github.com/contributor/widget.git' \
+    PATH="$d/fakebin:$PATH" FM_HOME="$d/home" \
+    "$FORK_TARGET" init "$d/repo" >"$d/out" 2>"$err" || status=$?
+  expect_code 1 "$status" "a GitHub failure must stop initialization"
+  assert_contains "$(cat "$d/nm.log")" "status" \
+    "an unresolved target should inspect the existing registration"
+  assert_not_contains "$(cat "$d/nm.log")" "init" \
+    "an unresolved target must not replace the existing registration"
+  assert_contains "$(cat "$err")" "authenticated GitHub account" \
+    "the unresolved input should be reported"
+  assert_contains "$(cat "$err")" "preserving existing" \
+    "the existing registration should be explicitly preserved"
+  pass "init preserves an existing registration when GitHub resolution fails"
+}
+
 test_declared_owner_does_not_rewrite_local_origin() {
   local d status; d=$(new_case local-declared-owner)
   make_fakebin "$d" >/dev/null
@@ -341,5 +376,6 @@ test_invalid_declared_owner_path_is_refused
 test_surrounding_whitespace_is_allowed
 test_init_passes_the_resolved_target_through
 test_init_without_a_fork_target_initializes_against_origin
+test_init_preserves_existing_registration_on_gh_failure
 test_declared_owner_does_not_rewrite_local_origin
 test_usage_error_exits_2

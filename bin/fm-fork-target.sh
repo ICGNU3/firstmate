@@ -29,8 +29,8 @@
 #      resolves to nothing rather than to a url whose push would 404.
 #   3. Nothing - the maintainer shape, where origin itself is writable. The
 #      gate is then initialized exactly as it was before this script existed.
-# Every step is read-only and fails open to the next: a missing `gh`, a failed
-# api call, or an unparseable origin resolves to nothing, never to an error.
+# Every step is read-only. A missing `gh` resolves to no fork target; an
+# unreadable or unparseable input reports an incomplete resolution.
 #
 # `no-mistakes init` refreshes an existing registration, so `init` is also the
 # repair path for a home whose gate was already initialized against an
@@ -173,80 +173,178 @@ url_host() {  # <url>
   printf '%s' "$host"
 }
 
-# The account `gh` is authenticated as, or nothing. Read-only, fails open.
+# The account `gh` is authenticated as, or nothing. Read-only.
 gh_login() {
+  local login
   command -v gh >/dev/null 2>&1 || return 1
-  gh api user -q .login 2>/dev/null | tr -d '[:space:]'
+  login=$(gh api user -q .login 2>/dev/null) || return 2
+  login=$(printf '%s' "$login" | tr -d '[:space:]')
+  [ -n "$login" ] || return 2
+  printf '%s' "$login"
 }
 
 gh_fork_exists() {  # <account> <repo> <parent-owner> <parent-repo>
-  local metadata expected
-  command -v gh >/dev/null 2>&1 || return 1
+  local metadata expected status detail
+  command -v gh >/dev/null 2>&1 || return 2
   metadata=$(gh repo view "$1/$2" --json isFork,parent \
-    --jq '[.isFork, (.parent.nameWithOwner // "")] | @tsv' 2>/dev/null) || return 1
+    --jq '[.isFork, (.parent.nameWithOwner // "")] | @tsv' 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    detail=$(printf '%s' "$metadata" | tr '[:upper:]' '[:lower:]')
+    case "$detail" in
+      *404*|*"not found"*|*"could not resolve to a repository"*) return 1 ;;
+      *) return 2 ;;
+    esac
+  fi
   metadata=$(printf '%s' "$metadata" | tr '[:upper:]' '[:lower:]')
   expected=$(printf 'true\t%s/%s' "$3" "$4" | tr '[:upper:]' '[:lower:]')
-  [ "$metadata" = "$expected" ]
+  [ "$metadata" = "$expected" ] && return 0
+  return 1
 }
 
 resolve_fork_url() {  # <dir>
-  local dir=$1 origin owner repo declared login config_status host
-  origin=$(git -C "$dir" remote get-url origin 2>/dev/null) || return 0
-  [ -n "$origin" ] || return 0
-  url_has_credentials "$origin" \
-    && die "origin URL contains credentials; refusing push-target resolution"
+  local dir=$1 origin owner repo declared login config_status host login_status fork_status target remotes
+  if ! origin=$(git -C "$dir" remote get-url origin 2>/dev/null); then
+    remotes=$(git -C "$dir" remote 2>/dev/null) || {
+      printf 'error: could not read remotes for %s\n' "$dir" >&2
+      return 2
+    }
+    if printf '%s\n' "$remotes" | awk '$1 == "origin" { found=1 } END { exit !found }'; then
+      printf 'error: could not read origin for %s\n' "$dir" >&2
+      return 2
+    fi
+    return 1
+  fi
+  [ -n "$origin" ] || return 1
+  if url_has_credentials "$origin"; then
+    printf 'error: origin URL contains credentials; refusing push-target resolution\n' >&2
+    return 3
+  fi
 
   if declared=$(config_token fork-owner); then
-    account_safe "$declared" \
-      || die "config/fork-owner is not a usable forge account: $declared"
-    url_is_forge_remote "$origin" || return 0
-    owner=$(url_owner "$origin") || return 0
-    [ "$declared" != "$owner" ] || return 0
-    url_swap_owner "$origin" "$declared" || return 0
+    if ! account_safe "$declared"; then
+      printf 'error: config/fork-owner is not a usable forge account: %s\n' "$declared" >&2
+      return 3
+    fi
+    url_is_forge_remote "$origin" || return 1
+    owner=$(url_owner "$origin") || {
+      printf 'error: could not parse the forge origin for %s\n' "$dir" >&2
+      return 2
+    }
+    [ "$declared" != "$owner" ] || return 1
+    target=$(url_swap_owner "$origin" "$declared") || {
+      printf 'error: could not construct the fork target for %s\n' "$dir" >&2
+      return 2
+    }
+    printf '%s\n' "$target"
     return 0
   else
     config_status=$?
-    [ "$config_status" -eq 1 ] \
-      || die "config/fork-owner must contain exactly one nonempty forge account token"
+    if [ "$config_status" -ne 1 ]; then
+      printf 'error: config/fork-owner must contain exactly one nonempty forge account token\n' >&2
+      return 3
+    fi
   fi
 
-  owner=$(url_owner "$origin") || return 0
-  repo=$(url_repo "$origin") || return 0
+  url_is_forge_remote "$origin" || return 1
+  owner=$(url_owner "$origin") || {
+    printf 'error: could not parse the forge origin for %s\n' "$dir" >&2
+    return 2
+  }
+  repo=$(url_repo "$origin") || {
+    printf 'error: could not parse the forge repository for %s\n' "$dir" >&2
+    return 2
+  }
 
   # `gh` speaks only to GitHub, so an origin that does not name a GitHub host
   # has no account this credential could own a fork under. Declared
   # config/fork-owner above stays host-agnostic; only this derived path is
   # gated, which also keeps a local or non-forge origin from reaching the api.
-  host=$(url_host "$origin") || return 0
+  host=$(url_host "$origin") || {
+    printf 'error: could not parse the forge host for %s\n' "$dir" >&2
+    return 2
+  }
   host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
-  [ "$host" = github.com ] || return 0
-  login=$(gh_login) || return 0
-  account_safe "$login" || return 0
-  [ "$login" != "$owner" ] || return 0
-  gh_fork_exists "$login" "$repo" "$owner" "$repo" || return 0
-  url_swap_owner "$origin" "$login" || return 0
+  [ "$host" = github.com ] || return 1
+  login_status=0
+  login=$(gh_login) || login_status=$?
+  case "$login_status" in
+    1) return 1 ;;
+    2)
+      printf 'error: could not determine the authenticated GitHub account for %s\n' "$origin" >&2
+      return 2
+      ;;
+  esac
+  if ! account_safe "$login"; then
+    printf 'error: authenticated GitHub account is not usable for %s\n' "$origin" >&2
+    return 2
+  fi
+  [ "$login" != "$owner" ] || return 1
+  fork_status=0
+  gh_fork_exists "$login" "$repo" "$owner" "$repo" || fork_status=$?
+  case "$fork_status" in
+    0)
+      target=$(url_swap_owner "$origin" "$login") || {
+        printf 'error: could not construct the fork target for %s\n' "$dir" >&2
+        return 2
+      }
+      printf '%s\n' "$target"
+      return 0
+      ;;
+    1) return 1 ;;
+    *)
+      printf 'error: could not verify fork target %s/%s for %s\n' "$login" "$repo" "$origin" >&2
+      return 2
+      ;;
+  esac
 }
 
 cmd_resolve() {  # <dir>
-  local dir=$1 url
+  local dir=$1 url status
   [ -d "$dir" ] || die "not a directory: $dir"
-  url=$(resolve_fork_url "$dir") || exit 1
-  [ -z "$url" ] || printf '%s\n' "$url"
+  status=0
+  url=$(resolve_fork_url "$dir") || status=$?
+  case "$status" in
+    0) printf '%s\n' "$url" ;;
+    1) ;;
+    *) exit 1 ;;
+  esac
+}
+
+has_existing_fork_registration() {  # <dir>
+  local status_output
+  status_output=$(cd "$1" && no-mistakes status 2>/dev/null) || return 1
+  printf '%s\n' "$status_output" | awk '$1 == "fork:" { found=1 } END { exit !found }'
 }
 
 cmd_init() {  # <dir>
-  local dir=$1 url
+  local dir=$1 url status
   [ -d "$dir" ] || die "not a directory: $dir"
   git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository: $dir"
   command -v no-mistakes >/dev/null 2>&1 || die "no-mistakes command not found"
-  url=$(resolve_fork_url "$dir") || exit 1
-  if [ -n "$url" ]; then
-    printf 'fork target: %s\n' "$url"
-    ( cd "$dir" && no-mistakes init --fork-url "$url" ) || die "no-mistakes init failed for $dir"
-  else
-    printf 'fork target: origin (no fork configured or resolvable for this home)\n'
-    ( cd "$dir" && no-mistakes init ) || die "no-mistakes init failed for $dir"
-  fi
+  status=0
+  url=$(resolve_fork_url "$dir") || status=$?
+  case "$status" in
+    0)
+      printf 'fork target: %s\n' "$url"
+      ( cd "$dir" && no-mistakes init --fork-url "$url" ) || die "no-mistakes init failed for $dir"
+      ;;
+    1)
+      printf 'fork target: origin (no fork configured or resolvable for this home)\n'
+      ( cd "$dir" && no-mistakes init ) || die "no-mistakes init failed for $dir"
+      ;;
+    2)
+      if has_existing_fork_registration "$dir"; then
+        printf 'error: fork-target resolution incomplete; preserving existing no-mistakes registration\n' >&2
+      else
+        printf 'error: fork-target resolution incomplete; no-mistakes registration unchanged\n' >&2
+      fi
+      exit 1
+      ;;
+    *)
+      exit 1
+      ;;
+  esac
   ( cd "$dir" && no-mistakes doctor ) || die "no-mistakes doctor failed for $dir"
 }
 
