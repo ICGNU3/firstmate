@@ -1148,16 +1148,18 @@ test_home_seed_refreshes_initialized_existing_no_mistakes_projects() {
   subhome="$TMP_ROOT/existing-initialized-subhome"
   err="$TMP_ROOT/existing-initialized.err"
   log="$TMP_ROOT/existing-initialized-no-mistakes.log"
-  mkdir -p "$home/projects" "$home/data" "$home/state"
+  mkdir -p "$home/projects" "$home/data" "$home/state" "$home/config"
   fm_git_init_commit "$home/projects/alpha"
   fm_git_init_commit "$home/projects/beta"
   fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/existing-alpha.git"
   fm_git_add_origin "$home/projects/beta" "$TMP_ROOT/remotes/existing-beta.git"
   git clone --quiet "$ROOT" "$subhome"
-  mkdir -p "$subhome/projects"
+  mkdir -p "$subhome/projects" "$subhome/config"
+  printf '%s\n' 'https://github.example/contributor/old-widget.git' > "$subhome/config/fork-url"
   origin=$(git -C "$home/projects/alpha" remote get-url origin)
   git clone --quiet "$origin" "$subhome/projects/alpha"
   git -C "$subhome/projects/alpha" remote add no-mistakes "$TMP_ROOT/no-mistakes-alpha.git"
+  printf '%s\n' 'https://github.example/contributor/new-widget.git' > "$home/config/fork-url"
   printf '%s\n' '- alpha - alpha project (added 2026-06-22)' '- beta - beta project (added 2026-06-22)' > "$home/data/projects.md"
   fakebin=$(make_recording_no_mistakes "$TMP_ROOT/existing-initialized-fake")
   : > "$log"
@@ -1175,8 +1177,10 @@ test_home_seed_refreshes_initialized_existing_no_mistakes_projects() {
     || fail "seed did not run the target doctor for the initialized existing clone"
   [ -f "$subhome/projects/alpha/.no-mistakes-init" ] || fail "seed did not refresh the existing clone's gate"
   [ -f "$subhome/projects/alpha/.no-mistakes-doctor" ] || fail "seed did not doctor the existing clone's gate"
-  [ ! -e "$subhome/projects/beta" ] || fail "failed seed left a newly cloned project after no-mistakes failure"
-  pass "home seeding refreshes initialized existing no-mistakes clones"
+  [ "$(cat "$subhome/config/fork-url")" = 'https://github.example/contributor/new-widget.git' ] \
+    || fail "post-publication target refresh rolled back the committed fork-url"
+  [ -e "$subhome/projects/beta" ] || fail "post-publication target refresh rolled back a committed project clone"
+  pass "home seeding keeps the committed seed when post-publication refresh fails"
 }
 
 test_home_seed_inherits_fork_url_before_refreshing_initialized_existing_project() {

@@ -18,10 +18,9 @@
 #       is copied to data/charter.md, newly cloned no-mistakes projects are
 #       initialized, an ignored .fm-secondmate-parent binding is published before
 #       the .fm-secondmate-home identity marker, and data/secondmates.md is updated.
-#       Seeding is transactional: on validation, clone, init, or registry failure,
-#       generated briefs, new homes, new project clones, and registry edits are
-#       rolled back. Treehouse-acquired homes are returned only when the rollback
-#       target is safe; a failed return warns because the lease may still be held.
+#       Seeding is transactional through publication: validation, clone, and registry
+#       failures roll back generated briefs, new homes, new project clones, and
+#       registry edits. No-mistakes target refresh runs after publication.
 #       Set FM_SECONDMATE_CHARTER='<charter>' to seed from inline charter text
 #       when no filled charter brief exists. Set FM_SECONDMATE_SCOPE='<scope>'
 #       to override the registry routing scope. Otherwise the registry summary
@@ -518,6 +517,7 @@ seed_registry_lock_release() {
 seed_exit_cleanup() {
   seed_rollback
   seed_registry_lock_release
+  [ -z "${SEED_BACKUP_DIR:-}" ] || rm -rf -- "$SEED_BACKUP_DIR" 2>/dev/null || true
 }
 SEED_HOME=
 SEED_HOME_ACQUIRED=0
@@ -963,15 +963,6 @@ seed_home() {
     clone_project "$project" "$home"
   done
   sync_project_registry "$home" "$@"
-  for project in "$@"; do
-    project_dst=$(validate_project_destination "$home" "$project") || return 1
-    if seed_project_was_created "$project_dst"; then
-      initialize_no_mistakes_project "$home" "$project" 1
-    else
-      initialize_no_mistakes_project "$home" "$project" 0
-    fi
-  done
-
   cp "$SEED_PARENT_BRIEF" "$home/data/charter.md"
 
   projects_csv=$(join_projects "$@")
@@ -991,6 +982,14 @@ seed_home() {
   write_registry "$id" "$home" "$projects_csv" "$SEED_PARENT_BRIEF"
   validate_registry
   SEED_COMMITTED=1
+  for project in "$@"; do
+    project_dst=$(validate_project_destination "$home" "$project") || return 1
+    if seed_project_was_created "$project_dst"; then
+      initialize_no_mistakes_project "$home" "$project" 1
+    else
+      initialize_no_mistakes_project "$home" "$project" 0
+    fi
+  done
   seed_registry_lock_release
   trap - EXIT
   rm -rf -- "$SEED_BACKUP_DIR"

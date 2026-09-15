@@ -189,13 +189,18 @@ write_registry() {
 EOF
 }
 
+# The generated Definition of done is the public contract delivered to a worker.
+extract_definition_of_done() {
+  sed -n '/^# Definition of done$/,$p' "$1"
+}
+
 # fm-brief.sh must exit 0 and produce a brief with no unreplaced shell
 # metacharacter corruption for every ship delivery mode. This also guards
 # against any *new* unescaped apostrophe or unbalanced quote later added to
 # one of these DOD blocks, since a broken heredoc corrupts or empties the
 # generated brief content, not just the script's own syntax.
 test_ship_modes_generate_clean_briefs() {
-  local home id mode brief status home_q
+  local home id mode brief status home_q dod
   home="$TMP_ROOT/ship-home"
   write_registry "$home"
   home_q=$(printf '%q' "$home")
@@ -214,16 +219,18 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{FIRSTMATE_SPEC}" "$brief" "$id: brief missing the {FIRSTMATE_SPEC} placeholder"
     assert_grep "## Captain's intent" "$brief" "$id: brief missing Captain's intent subsection"
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
+    dod="$TMP_ROOT/$id-dod.md"
+    extract_definition_of_done "$brief" > "$dod"
     if [ "$mode" = no-mistakes ]; then
-      assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh init ." "$brief" \
-        "$id: no-mistakes brief must refresh the push target before starting the gate"
-      assert_grep "if it exits non-zero, stop and report" "$brief" \
-        "$id: no-mistakes brief must stop when target initialization fails"
+      assert_grep "Status 4 is advisory because no fork url is declared" "$dod" \
+        "$id: no-mistakes contract must continue after the advisory target status"
+      assert_grep "Any other non-zero status means stop and report" "$dod" \
+        "$id: no-mistakes contract must stop after a non-advisory target failure"
     elif [ "$mode" = direct-PR ]; then
-      assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh resolve ." "$brief" \
-        "$id: direct-PR brief must resolve the push target from its effective home"
-      assert_grep "check its exit status" "$brief" \
-        "$id: direct-PR brief must distinguish resolver failure from empty output"
+      assert_grep "Before pushing, run" "$dod" \
+        "$id: direct-PR contract must resolve the push target before pushing"
+      assert_grep "check its exit status" "$dod" \
+        "$id: direct-PR contract must distinguish resolver failure from empty output"
     fi
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
@@ -338,7 +345,7 @@ test_faster_paths_use_configured_authority_without_stacked_review() {
 # Pin the specific line the bug lived on: the no-mistakes DOD's no-mistakes
 # reference must render as plain prose with no dangling apostrophe artifact.
 test_no_mistakes_dod_wording() {
-  local home id brief spelling
+  local home id brief spelling dod
   home="$TMP_ROOT/wording-home"
   mkdir -p "$home/data"
   id="brief-wording-b1"
@@ -351,8 +358,12 @@ test_no_mistakes_dod_wording() {
   assert_grep '[captain]' "$brief" "rendered intent contract must explain the neutral legacy provenance marker"
   assert_grep "no-mistakes itself provides for the mechanics" "$brief" \
     "no-mistakes DOD lost its guidance-reference sentence"
-  assert_grep "fm-fork-target.sh init ." "$brief" \
-    "no-mistakes DOD must refresh the push target before starting the gate"
+  dod="$TMP_ROOT/wording-dod.md"
+  extract_definition_of_done "$brief" > "$dod"
+  assert_grep "Status 4 is advisory because no fork url is declared" "$dod" \
+    "no-mistakes DOD must continue after an advisory target failure"
+  assert_grep "Any other non-zero status means stop and report" "$dod" \
+    "no-mistakes DOD must stop after a non-advisory target failure"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep '`no-mistakes axi run --help`' "$brief" \
     "no-mistakes DOD must render literal backticks around the help command"
@@ -511,12 +522,18 @@ test_herdr_lab_contract_quotes_foreign_firstmate_path() {
 # generated command must survive a Firstmate root containing a space, or the
 # worker's very first delivery step splits into two words and fails.
 test_fork_target_command_quotes_foreign_firstmate_path() {
-  local home id brief foreign_root resolver_q mode verb
+  local home id brief foreign_root resolver_bin resolver_log command mode verb expected
   home="$TMP_ROOT/fork-target-foreign-home"
   foreign_root="$TMP_ROOT/firstmate helper's root"
-  mkdir -p "$home/data"
+  resolver_bin="$foreign_root/bin/fm-fork-target.sh"
+  resolver_log="$TMP_ROOT/fork-target-foreign.log"
+  mkdir -p "$home/data" "$(dirname "$resolver_bin")"
   write_registry "$home"
-  resolver_q=$(printf '%q' "$foreign_root/bin/fm-fork-target.sh")
+  cat > "$resolver_bin" <<'EOF'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$FM_HOME" "${1:-}" "${2:-}" > "$FM_TEST_RESOLVER_LOG"
+EOF
+  chmod +x "$resolver_bin"
   for mode_verb in "no-mistakes:init" "direct-PR:resolve"; do
     mode=${mode_verb%%:*}
     verb=${mode_verb##*:}
@@ -525,10 +542,17 @@ test_fork_target_command_quotes_foreign_firstmate_path() {
       "$id" foreign --mode "$mode" >/dev/null 2>&1
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "$id: brief was not scaffolded"
-    assert_grep "$resolver_q $verb ." "$brief" \
-      "$id: generated resolver command must quote an absolute Firstmate root"
-    assert_no_grep "$foreign_root/bin/fm-fork-target.sh $verb ." "$brief" \
-      "$id: generated resolver command must not interpolate an unquoted root"
+    case "$verb" in
+      init) command=$(sed -n 's/.*run `\([^`]* init \.\)`.*/\1/p' "$brief" | head -1) ;;
+      resolve) command=$(sed -n 's/.*run `\([^`]* resolve \.\)`.*/\1/p' "$brief" | head -1) ;;
+    esac
+    [ -n "$command" ] || fail "$id: generated contract did not expose an executable resolver command"
+    : > "$resolver_log"
+    ( cd "$ROOT" && FM_TEST_RESOLVER_LOG="$resolver_log" bash -c "$command" ) \
+      || fail "$id: generated resolver command did not execute"
+    expected="$home|$verb|."
+    [ "$(cat "$resolver_log")" = "$expected" ] \
+      || fail "$id: generated resolver command did not preserve its arguments"
   done
   pass "fm-brief.sh: the push-target command quotes its Firstmate root"
 }

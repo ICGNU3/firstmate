@@ -444,8 +444,8 @@ case "$MODE" in
     SETUP2=""
     ;;
   *)  # no-mistakes
-    SETUP2="
-2. Before starting no-mistakes, run \`FM_HOME=$FM_HOME_Q $FORK_TARGET_HELPER init .\`; if it exits non-zero, stop and report the resolver or initialization error instead of starting the gate. It refreshes the gate against the push target this home can actually write, including when the gate was already initialized."
+    SETUP2=$(fm_no_mistakes_target_instruction "starting no-mistakes" "$FM_HOME_Q" "$FORK_TARGET_HELPER")
+    SETUP2="2. $SETUP2"
     ;;
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID") || exit 1

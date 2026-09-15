@@ -80,6 +80,12 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id>
   esac
 }
 
+fm_no_mistakes_target_instruction() {  # <context> <quoted-home> <quoted-resolver>
+  local context=$1 home_q=$2 resolver_q=$3
+  printf 'Before %s, run `FM_HOME=%s %s init .` and capture its exit status. Status 0 means the target is ready and you may continue. Status 4 is advisory because no fork url is declared and the gate keeps its existing target: report the warning and continue. Any other non-zero status means stop and report the resolver or initialization error; do not start the gate.\n' \
+    "$context" "$home_q" "$resolver_q"
+}
+
 # Return 0 when a Task subsection still consists only of its scaffold
 # placeholder. A missing file and legacy briefs carry no such placeholders.
 fm_brief_task_placeholders_present() {  # <file>
@@ -295,7 +301,9 @@ The task is complete only when committed on your branch.
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 
-Before starting /no-mistakes, run \`FM_HOME=$home_q $resolver_q init .\`; if it exits non-zero, stop and report the resolver or initialization error instead of starting the gate. It refreshes the gate against the push target this home can actually write, including when the gate was already initialized.
+EOF
+      fm_no_mistakes_target_instruction "starting /no-mistakes" "$home_q" "$resolver_q"
+      cat <<EOF
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.

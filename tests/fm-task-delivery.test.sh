@@ -59,6 +59,21 @@ fill_brief_subsections() {  # <file> <intent> <spec>
   printf '%s\n' "$content" > "$file"
 }
 
+extract_definition_of_done() {
+  sed -n '/^# Definition of done$/,$p' "$1"
+}
+
+execute_generated_resolver_command() {  # <payload> <verb> <log>
+  local payload=$1 verb=$2 log=$3 command
+  case "$verb" in
+    init) command=$(sed -n 's/.*run `\([^`]* init \.\)`.*/\1/p' "$payload" | head -1) ;;
+    resolve) command=$(sed -n 's/.*run `\([^`]* resolve \.\)`.*/\1/p' "$payload" | head -1) ;;
+    *) fail "unsupported generated resolver verb: $verb" ;;
+  esac
+  [ -n "$command" ] || fail "$verb: generated contract did not expose an executable resolver command"
+  ( cd "$ROOT" && FM_TEST_RESOLVER_LOG="$log" bash -c "$command" )
+}
+
 run_spawn() {  # <home> <fakebin> <spawn-args...>
   local home=$1 fakebin=$2
   shift 2
@@ -307,11 +322,19 @@ test_promote_refuses_a_symlinked_task_record() {
 # prints against a capturing fm-send.sh, and asserts on the message the worker would
 # actually receive - for every supported mode.
 test_promotion_delivers_the_real_definition_of_done() {
-  local home meta out sendroot payload mode id brief_dod delivered_dod home_q
+  local home meta out sendroot payload mode id brief_dod delivered_dod foreign_root resolver_bin resolver_log dod
   home="$TMP_ROOT/promote-dod/home"
   sendroot="$TMP_ROOT/promote-dod/sendroot"
+  foreign_root="$TMP_ROOT/promote-dod/firstmate helper's root"
+  resolver_bin="$foreign_root/bin/fm-fork-target.sh"
+  resolver_log="$TMP_ROOT/promote-dod/resolver.log"
   mkdir -p "$home/state" "$sendroot/bin"
-  home_q=$(printf '%q' "$home")
+  mkdir -p "$(dirname "$resolver_bin")"
+  cat > "$resolver_bin" <<'EOF'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$FM_HOME" "${1:-}" "${2:-}" > "$FM_TEST_RESOLVER_LOG"
+EOF
+  chmod +x "$resolver_bin"
   cat > "$sendroot/bin/fm-send.sh" <<'STUB'
 #!/usr/bin/env bash
 # Capture the message a promoted worker would receive, instead of steering one.
@@ -323,11 +346,11 @@ STUB
     id="promote-dod-$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
     meta="$home/state/$id.meta"
     printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
-    FM_HOME="$home" "$BRIEF" "$id" fixture-project --scout >/dev/null 2>&1 \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$foreign_root" "$BRIEF" "$id" fixture-project --scout >/dev/null 2>&1 \
       || fail "$mode: scout brief generation should succeed"
     fill_brief_subsections "$home/data/$id/brief.md" \
       "Ship the delivery-contract change." "Preserve the selected delivery mode."
-    out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode "$mode" --yolo off 2>&1) \
+    out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$foreign_root" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode "$mode" --yolo off 2>&1) \
       || fail "$mode: promotion should succeed"
 
     payload="$TMP_ROOT/promote-dod/payload-$id"
@@ -356,11 +379,24 @@ STUB
     assert_grep "## Firstmate spec" "$payload" \
       "$mode: promoted worker did not receive the Firstmate spec subsection"
 
+    : > "$resolver_log"
+    if [ "$mode" = no-mistakes ]; then
+      execute_generated_resolver_command "$payload" init "$resolver_log" \
+        || fail "$mode: promoted worker's target initialization command did not execute"
+      [ "$(cat "$resolver_log")" = "$home|init|." ] \
+        || fail "$mode: promoted worker's target initialization command split its arguments"
+    elif [ "$mode" = direct-PR ]; then
+      execute_generated_resolver_command "$payload" resolve "$resolver_log" \
+        || fail "$mode: promoted worker's target resolution command did not execute"
+      [ "$(cat "$resolver_log")" = "$home|resolve|." ] \
+        || fail "$mode: promoted worker's target resolution command split its arguments"
+    fi
+
     # Compare the public outputs of both real generation paths. The promoted
     # payload ends at its Definition of done, as does an ordinary generated
     # brief, so identical suffixes prove both workers receive the same contract.
     rm "$home/data/$id/brief.md"
-    FM_HOME="$home" "$BRIEF" "$id" fixture-project --mode "$mode" >/dev/null 2>&1 \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$foreign_root" "$BRIEF" "$id" fixture-project --mode "$mode" >/dev/null 2>&1 \
       || fail "$mode: ordinary ship brief generation should succeed"
     brief_dod="$TMP_ROOT/promote-dod/brief-dod-$id"
     delivered_dod="$TMP_ROOT/promote-dod/delivered-dod-$id"
@@ -371,10 +407,12 @@ STUB
   done
 
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-no-mistakes"
-  assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh init ." "$payload" \
-    "promoted no-mistakes worker did not receive the effective home for target initialization"
-  assert_grep "if it exits non-zero, stop and report" "$payload" \
-    "promoted no-mistakes worker must stop when target initialization fails"
+  dod="$TMP_ROOT/promote-dod/promoted-no-mistakes-dod"
+  extract_definition_of_done "$payload" > "$dod"
+  assert_grep "Status 4 is advisory because no fork url is declared" "$dod" \
+    "promoted no-mistakes worker must continue after the advisory target status"
+  assert_grep "Any other non-zero status means stop and report" "$dod" \
+    "promoted no-mistakes worker must stop after a non-advisory target failure"
   assert_grep "ask-user findings are never yours to answer: escalate to firstmate" "$payload" \
     "promoted no-mistakes worker did not receive the ask-user escalation rule"
   assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$payload" \
@@ -387,9 +425,11 @@ STUB
     "promoted no-mistakes worker did not receive the fleet-wide ban wording"
 
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-direct-pr"
-  assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh resolve ." "$payload" \
-    "promoted direct-PR worker did not receive the effective home for target resolution"
-  assert_grep "check its exit status" "$payload" \
+  dod="$TMP_ROOT/promote-dod/promoted-direct-pr-dod"
+  extract_definition_of_done "$payload" > "$dod"
+  assert_grep "Before pushing, run" "$dod" \
+    "promoted direct-PR worker must resolve the push target before pushing"
+  assert_grep "check its exit status" "$dod" \
     "promoted direct-PR worker must distinguish resolver failure from empty output"
   assert_grep "supersede the scout delivery rules and report-based Definition of done" "$payload" \
     "promoted worker retained the scout delivery contract"

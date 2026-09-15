@@ -54,6 +54,8 @@ PROVISION_LOCK=
 PROVISION_LOCK_HELD=0
 CREATED_PROJECTS="$TMP/created-projects"
 : > "$CREATED_PROJECTS"
+NO_MISTAKES_PROJECTS="$TMP/no-mistakes-projects"
+: > "$NO_MISTAKES_PROJECTS"
 release_provision_lock() {
   if [ "$PROVISION_LOCK_HELD" -eq 1 ]; then
     fm_lock_release "$PROVISION_LOCK"
@@ -270,9 +272,7 @@ EOF
     if [ "$PROJECT_CREATED" -eq 0 ] && ! git -C "$DEST" remote get-url no-mistakes >/dev/null 2>&1; then
       die "existing no-mistakes project $NAME is not initialized"
     fi
-    command -v no-mistakes >/dev/null 2>&1 || die "no-mistakes is unavailable for project $NAME"
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fork-target.sh" init "$DEST" >/dev/null \
-      || die "no-mistakes initialization failed for project $NAME"
+    printf '%s\n' "$NAME" >> "$NO_MISTAKES_PROJECTS"
   fi
   printf '%s\n' "$REGISTRY_LINE" >> "$PROJECT_REG"
 done < <(grep '^project=' "$TMP/manifest")
@@ -291,6 +291,13 @@ mv -f -- "$FM_HOME/.fm-secondmate-parent.tmp.$$" "$FM_HOME/.fm-secondmate-parent
 printf '%s\n' "$ID" > "$FM_HOME/.fm-secondmate-home.tmp.$$"
 mv -f -- "$FM_HOME/.fm-secondmate-home.tmp.$$" "$FM_HOME/.fm-secondmate-home"
 PUBLISHED=1
+while IFS= read -r NAME; do
+  [ -n "$NAME" ] || continue
+  DEST="$FM_HOME/projects/$NAME"
+  command -v no-mistakes >/dev/null 2>&1 || die "no-mistakes is unavailable for project $NAME"
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fork-target.sh" init "$DEST" >/dev/null \
+    || die "no-mistakes initialization failed for project $NAME"
+done < "$NO_MISTAKES_PROJECTS"
 release_provision_lock
 trap - EXIT
 rm -rf -- "$TMP"
