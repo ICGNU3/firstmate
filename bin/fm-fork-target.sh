@@ -15,6 +15,8 @@
 # Usage:
 #   fm-fork-target.sh resolve <dir>   print the fork push url for <dir>, or
 #                                     nothing when this home pushes to origin
+#   fm-fork-target.sh matches <dir>   succeed when the registered fork target
+#                                     matches the current local declaration
 #   fm-fork-target.sh init <dir>      run `no-mistakes init` against the
 #                                     resolved target, then `no-mistakes doctor`
 #
@@ -57,10 +59,19 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 usage() {
-  echo "usage: fm-fork-target.sh resolve|init <dir>" >&2
+  echo "usage: fm-fork-target.sh resolve|matches|init <dir>" >&2
 }
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+
+fork_url_invalid_reason() {  # <url>
+  case "$1" in
+    '') printf 'it is empty' ;;
+    *[[:space:]]*) printf 'it contains whitespace' ;;
+    *://*) printf 'it uses an unsupported scheme' ;;
+    *) printf 'it is not an absolute remote URL or scp-like push URL' ;;
+  esac
+}
 
 config_token() {  # <name>
   local path="$CONFIG/$1" label="config/$1" state raw_status
@@ -186,18 +197,20 @@ fork_url_validate() {  # <url>
 }
 
 resolve_fork_url() {  # <dir>
-  local dir=$1 declared= config_status
+  local dir=$1 declared= config_status safe_declared reason
   if declared=$(config_token fork-url); then
     config_status=0
     fork_url_validate "$declared" || config_status=$?
+    safe_declared=$(printf '%q' "$declared")
     case "$config_status" in
       0) ;;
       1)
-        printf 'error: config/fork-url value %s is unusable: it must be an absolute remote URL or scp-like push URL\n' "$declared" >&2
+        reason=$(fork_url_invalid_reason "$declared")
+        printf 'error: config/fork-url value %s is unusable: %s\n' "$safe_declared" "$reason" >&2
         return 3
         ;;
       *)
-        printf 'error: config/fork-url value %s is unusable: its URL must include a host and path\n' "$declared" >&2
+        printf 'error: config/fork-url value %s is unusable: its URL must include a host and path\n' "$safe_declared" >&2
         return 3
         ;;
     esac
@@ -231,9 +244,31 @@ cmd_resolve() {  # <dir>
 }
 
 has_existing_fork_registration() {  # <dir>
+  registered_fork_url "$1" >/dev/null
+}
+
+registered_fork_url() {  # <dir>
   local status_output
   status_output=$(cd "$1" && no-mistakes status 2>/dev/null) || return 1
-  printf '%s\n' "$status_output" | awk '$1 == "fork:" { found=1 } END { exit !found }'
+  printf '%s\n' "$status_output" | awk '
+    $1 == "fork:" {
+      value=$0
+      sub(/^[^[:space:]]+[[:space:]]+/, "", value)
+      print value
+      found=1
+      exit
+    }
+    END { exit !found }
+  '
+}
+
+fork_target_registration_matches() {  # <dir>
+  local dir=$1 resolved_status=0 resolved registered
+  resolved=$(resolve_fork_url "$dir" 2>/dev/null) || resolved_status=$?
+  [ "$resolved_status" -eq 0 ] || return 1
+  registered=$(registered_fork_url "$dir") || return 1
+  [ -n "$registered" ] || return 1
+  [ "$resolved" = "$registered" ]
 }
 
 cmd_init() {  # <dir>
@@ -298,6 +333,7 @@ cmd_init() {  # <dir>
 [ $# -eq 2 ] || { usage; exit 2; }
 case "$1" in
   resolve) cmd_resolve "$2" ;;
+  matches) fork_target_registration_matches "$2" ;;
   init)    cmd_init "$2" ;;
   *)       usage; exit 2 ;;
 esac

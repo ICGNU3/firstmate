@@ -1177,6 +1177,36 @@ test_home_seed_skips_initialized_existing_no_mistakes_projects() {
   pass "home seeding skips initialized existing no-mistakes clones"
 }
 
+test_home_seed_inherits_fork_url_before_skipping_initialized_existing_project() {
+  local home subhome fakebin log origin expected actual
+  home="$TMP_ROOT/existing-initialized-fork-url-home"
+  subhome="$TMP_ROOT/existing-initialized-fork-url-subhome"
+  log="$TMP_ROOT/existing-initialized-fork-url-no-mistakes.log"
+  mkdir -p "$home/projects" "$home/data" "$home/state" "$home/config"
+  fm_git_init_commit "$home/projects/alpha"
+  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/existing-fork-url-alpha.git"
+  printf '%s\n' 'ssh://github.example/contributor/widget.git' > "$home/config/fork-url"
+  git clone --quiet "$ROOT" "$subhome"
+  mkdir -p "$subhome/projects"
+  origin=$(git -C "$home/projects/alpha" remote get-url origin)
+  git clone --quiet "$origin" "$subhome/projects/alpha"
+  git -C "$subhome/projects/alpha" remote add no-mistakes "$TMP_ROOT/no-mistakes-existing-fork-url.git"
+  printf '%s\n' '- alpha - alpha project (added 2026-06-22)' > "$home/data/projects.md"
+  fakebin=$(make_recording_no_mistakes "$TMP_ROOT/existing-initialized-fork-url-fake")
+  : > "$log"
+
+  PATH="$fakebin:$PATH" FM_FAKE_NO_MISTAKES_LOG="$log" \
+    FM_HOME="$home" FM_SECONDMATE_CHARTER='existing initialized fork target scope' \
+    "$ROOT/bin/fm-home-seed.sh" design "$subhome" alpha >/dev/null \
+    || fail "seed failed while inheriting fork-url into an initialized existing clone"
+  expected=$(cat "$home/config/fork-url")
+  actual=$(cat "$subhome/config/fork-url")
+  [ "$actual" = "$expected" ] \
+    || fail "initialized existing clone did not receive the parent's fork-url"
+  [ ! -s "$log" ] || fail "seed ran no-mistakes against an initialized existing clone"
+  pass "home seeding inherits fork-url before skipping initialized existing clones"
+}
+
 test_home_seed_refuses_uninitialized_existing_no_mistakes_project() {
   local home subhome err fakebin log origin
   home="$TMP_ROOT/existing-uninitialized-home"
@@ -2992,6 +3022,7 @@ test_home_seed_refuses_remote_backed_project_without_origin
 test_home_seed_refuses_existing_remote_backed_project_with_wrong_origin
 test_home_seed_resolves_relative_source_origins
 test_home_seed_skips_initialized_existing_no_mistakes_projects
+test_home_seed_inherits_fork_url_before_skipping_initialized_existing_project
 test_home_seed_refuses_uninitialized_existing_no_mistakes_project
 test_home_seed_refuses_project_destinations_outside_subhome
 test_home_seed_refuses_operational_dirs_outside_subhome

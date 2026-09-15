@@ -716,17 +716,6 @@ initialize_no_mistakes_project() {
   mode=$(project_mode_in_home "$home" "$project")
   [ "$mode" = no-mistakes ] || return 0
   dst=$(validate_project_destination "$home" "$project") || return 1
-  if git -C "$dst" remote get-url no-mistakes >/dev/null 2>&1; then
-    return 0
-  fi
-  if [ "$created" != 1 ]; then
-    echo "error: seeded project $project at $dst is not initialized for no-mistakes; refusing to mutate preexisting clone" >&2
-    return 1
-  fi
-  command -v no-mistakes >/dev/null 2>&1 || {
-    echo "error: no-mistakes command not found; cannot initialize $project in $home" >&2
-    return 1
-  }
   if ! FM_INHERITABLE_CONFIG='fork-url' \
     propagate_inheritable_config "$CONFIG" "$home/config"; then
     echo "error: failed to inherit fork target configuration before initializing $project in $home" >&2
@@ -742,6 +731,17 @@ initialize_no_mistakes_project() {
     echo "error: stale fork-url remained before initializing $project in $home" >&2
     return 1
   fi
+  if git -C "$dst" remote get-url no-mistakes >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$created" != 1 ]; then
+    echo "error: seeded project $project at $dst is not initialized for no-mistakes; refusing to mutate preexisting clone" >&2
+    return 1
+  fi
+  command -v no-mistakes >/dev/null 2>&1 || {
+    echo "error: no-mistakes command not found; cannot initialize $project in $home" >&2
+    return 1
+  }
   FM_HOME="$home" "$SCRIPT_DIR/fm-fork-target.sh" init "$dst" >/dev/null || {
     echo "error: failed to initialize no-mistakes for $project at $dst" >&2
     return 1

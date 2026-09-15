@@ -60,7 +60,7 @@ EOF
 }
 
 test_surrounding_whitespace_is_refused() {
-  local d status out err; d=$(new_case whitespace-url)
+  local d status out err safe; d=$(new_case whitespace-url)
   make_fakebin "$d" >/dev/null
   set_origin "$d" https://github.com/acme/widget.git
   printf ' ssh://github.example/contributor/widget.git \n' > "$d/home/config/fork-url"
@@ -69,7 +69,9 @@ test_surrounding_whitespace_is_refused() {
   assert_equals "" "$out" "an invalid URL must produce no output"
   err=$(cat "$d/err")
   assert_contains "$err" "config/fork-url" "the setting must be named"
-  assert_contains "$err" "unusable" "the whitespace reason must be stated"
+  safe=$(printf '%q' ' ssh://github.example/contributor/widget.git ')
+  assert_contains "$err" "value $safe" "the rejected value must be rendered safely"
+  assert_contains "$err" "contains whitespace" "the whitespace reason must be stated"
   pass "config/fork-url whitespace is rejected without normalization"
 }
 
@@ -85,15 +87,20 @@ test_unusable_declarations_are_refused_without_init() {
     expect_code 1 "$status" "unusable URL must stop init: $value"
     assert_equals "" "$out" "unusable URL must produce no stdout: $value"
     err=$(cat "$d/err")
-    assert_contains "$err" "$value" "unusable value must be named: $value"
+    if [ -n "$value" ]; then
+      assert_contains "$err" "$value" "unusable value must be named: $value"
+    else
+      assert_contains "$err" "value ''" "an empty unusable value must be visible"
+    fi
     assert_contains "$err" "$reason" "unusable reason must be concrete: $value"
     assert_not_contains "$(cat "$d/nm.log")" "init" \
       "unusable URL must not invoke no-mistakes init: $value"
   done <<'EOF'
-not-a-url|absolute remote URL or scp-like push URL
-github.com/acme/widget|absolute remote URL or scp-like push URL
-/tmp/upstream.git|absolute remote URL or scp-like push URL
-ftp://github.example/contributor/widget.git|absolute remote URL or scp-like push URL
+|it is empty
+not-a-url|not an absolute remote URL or scp-like push URL
+github.com/acme/widget|not an absolute remote URL or scp-like push URL
+/tmp/upstream.git|not an absolute remote URL or scp-like push URL
+ftp://github.example/contributor/widget.git|unsupported scheme
 https://|host and path
 https:///widget.git|host and path
 https://github.example|host and path

@@ -523,7 +523,7 @@ MODE_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
-PUSH_TARGET_INSTRUCTION=0
+RELAUNCH_PUSH_TARGET_MATCH=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -1490,7 +1490,6 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   }
   RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
-  PUSH_TARGET_INSTRUCTION=$(fm_meta_get "$RELAUNCH_META" push_target_instruction)
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
@@ -2531,6 +2530,10 @@ fm_brief_has_push_target_instruction() {
     END { exit !found }
   ' "$1"
 }
+if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
+  "$FM_ROOT/bin/fm-fork-target.sh" matches "$PROJ_ABS" >/dev/null 2>&1 \
+    && RELAUNCH_PUSH_TARGET_MATCH=1
+fi
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   if fm_brief_task_placeholders_present "$BRIEF"; then
     echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
@@ -2561,7 +2564,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     # recovers a stuck worker. The worker's own generated instructions run the
     # resolver before starting the gate, which is where a declaration changed
     # mid-task is picked up anyway.
-    if [ "$RELAUNCH" -eq 0 ] || [ "$PUSH_TARGET_INSTRUCTION" != 1 ]; then
+    if [ "$RELAUNCH" -eq 0 ] || [ "$RELAUNCH_PUSH_TARGET_MATCH" -ne 1 ]; then
       # Discriminate the resolver's init status rather than treating every
       # failure as fatal. A declared target we cannot use, or a resolution
       # error, still stops the spawn. A home with no declaration pushes to
@@ -2583,7 +2586,6 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
           ;;
       esac
     fi
-    [ "$RELAUNCH" -eq 0 ] && PUSH_TARGET_INSTRUCTION=1
   fi
   # Use the existing launch-brief overlay for every worker kind, including
   # pre-scope briefs and relaunches. Charters never enter this worker path.
@@ -4103,7 +4105,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects push_target_instruction control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -4116,7 +4118,6 @@ preserve_relaunch_meta() {
   echo "project=$PROJ_ABS"
   echo "harness=$HARNESS"
   echo "kind=$KIND"
-  [ "$PUSH_TARGET_INSTRUCTION" = 1 ] && echo "push_target_instruction=1"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "$YOLO" ] || echo "yolo=$YOLO"
   echo "tasktmp=$TASK_TMP"
