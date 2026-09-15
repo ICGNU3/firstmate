@@ -890,7 +890,63 @@ EOF
 }
 
 test_authorized_intent_keeps_words_without_composed_address
+# Both sides of the push-target boundary at LAUNCH time. The guard against
+# pushing to a target this home cannot write belongs at push time, so failing
+# to prepare an ORIGIN-shape gate must not stop work from starting, while a
+# DECLARED fork url that cannot be initialized must still refuse: the operator
+# named that target and silently launching against another one is the failure
+# this whole path exists to prevent.
+fake_failing_no_mistakes() {  # <fakebin>
+  cat > "$1/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = init ]; then
+  echo "init: simulated gate failure" >&2
+  exit 1
+fi
+exit 0
+SH
+  chmod +x "$1/no-mistakes"
+}
+
+test_spawn_starts_when_an_origin_shape_gate_cannot_be_prepared() {
+  local rec home proj fakebin id out
+  rec=$(make_home push-target-advisory)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  fake_failing_no_mistakes "$fakebin"
+  [ ! -e "$home/config/fork-url" ] || fail "fixture must have no declaration"
+  id=advisory-no-declaration
+  write_brief "$home" "$id"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" codex --mode no-mistakes --yolo off)
+  assert_present "$home/data/$id/launch-brief.md" \
+    "an undeclared origin-shape gate failure must not stop the worker from starting"
+  assert_contains "$out" "warning: could not prepare the no-mistakes push target" \
+    "the advisory path must stay loud rather than silent"
+  pass "fm-spawn: an origin-shape gate failure warns and still launches"
+}
+
+test_spawn_refuses_when_a_declared_fork_url_cannot_initialize() {
+  local rec home proj fakebin id out
+  rec=$(make_home push-target-declared)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  fake_failing_no_mistakes "$fakebin"
+  printf 'https://github.example/contributor/widget.git\n' > "$home/config/fork-url"
+  id=declared-cannot-initialize
+  write_brief "$home" "$id"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" codex --mode no-mistakes --yolo off)
+  assert_absent "$home/data/$id/launch-brief.md" \
+    "a declared fork url that cannot initialize must stop the spawn"
+  assert_contains "$out" "error: could not refresh no-mistakes push target" \
+    "the refusal must name the push target as the reason"
+  pass "fm-spawn: a declared push target that cannot initialize still refuses"
+}
+
 test_spawn_refreshes_legacy_worker_roles
+test_spawn_starts_when_an_origin_shape_gate_cannot_be_prepared
+test_spawn_refuses_when_a_declared_fork_url_cannot_initialize
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch

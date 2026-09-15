@@ -18,6 +18,17 @@
 #   fm-fork-target.sh init <dir>      run `no-mistakes init` against the
 #                                     resolved target, then `no-mistakes doctor`
 #
+# `init` exit status, which callers are expected to discriminate:
+#   0  the gate is initialized against the resolved target
+#   1  something is wrong and the caller must stop: resolution errored, the
+#      declaration is unusable, or a DECLARED fork url could not be initialized
+#   4  ADVISORY - no fork url is declared here, so the target is origin, and
+#      preparing that gate failed. The declared-target guarantee is not at
+#      stake, so a caller whose own work is not a push may warn and continue.
+#      The guard against pushing to an unwritable target lives at push time, in
+#      the generated worker instructions and in `no-mistakes init` itself; this
+#      status only says the gate was not freshly prepared here.
+#
 # Resolution uses only the local config/fork-url declaration:
 #   1. config/fork-url - a complete push url used verbatim and inherited by
 #      secondmate homes.
@@ -182,12 +193,31 @@ cmd_init() {  # <dir>
   url=$(resolve_fork_url "$dir") || status=$?
   case "$status" in
     0)
+      # A declared target that cannot be initialized is always fatal: the
+      # operator named this url, so silently leaving the gate pointed somewhere
+      # else is the exact failure this script exists to prevent.
       printf 'fork target: %s\n' "$url"
       ( cd "$dir" && no-mistakes init --fork-url "$url" ) || die "no-mistakes init failed for $dir"
+      ( cd "$dir" && no-mistakes doctor ) || die "no-mistakes doctor failed for $dir"
+      return 0
       ;;
     1)
+      # No declaration: this home pushes to origin, and preparing that gate is
+      # advisory rather than fatal. The guard against pushing somewhere
+      # unwritable belongs at push time, where the generated worker
+      # instructions and no-mistakes' own init both still enforce it; a caller
+      # that cannot start work on a failure here would be stopped by ordinary
+      # gate trouble hours before any push exists.
       printf 'fork target: origin (no fork configured or resolvable for this home)\n'
-      ( cd "$dir" && no-mistakes init ) || die "no-mistakes init failed for $dir"
+      if ! ( cd "$dir" && no-mistakes init ); then
+        printf 'warning: no-mistakes init failed for %s and no fork url is declared in this home, so the gate keeps whatever target it already had\n' "$dir" >&2
+        return 4
+      fi
+      if ! ( cd "$dir" && no-mistakes doctor ); then
+        printf 'warning: no-mistakes doctor failed for %s after initializing against origin\n' "$dir" >&2
+        return 4
+      fi
+      return 0
       ;;
     2|3)
       if has_existing_fork_registration "$dir"; then
@@ -195,13 +225,12 @@ cmd_init() {  # <dir>
       else
         printf 'error: fork-target resolution incomplete; no-mistakes registration unchanged\n' >&2
       fi
-      exit 1
+      return 1
       ;;
     *)
-      exit 1
+      return 1
       ;;
   esac
-  ( cd "$dir" && no-mistakes doctor ) || die "no-mistakes doctor failed for $dir"
 }
 
 [ $# -eq 2 ] || { usage; exit 2; }

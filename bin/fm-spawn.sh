@@ -2544,10 +2544,26 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
         exit 1
       fi
     fi
-    if ! "$FM_ROOT/bin/fm-fork-target.sh" init "$PROJ_ABS"; then
-      echo "error: could not refresh no-mistakes push target for $PROJ_ABS" >&2
-      exit 1
-    fi
+    # Discriminate the resolver's init status rather than treating every
+    # failure as fatal. A declared target we cannot use, or a resolution error,
+    # still stops the spawn. A home with no declaration pushes to origin, and
+    # failing to prepare that gate must not stop work from STARTING: the guard
+    # against pushing somewhere unwritable belongs at push time, hours later,
+    # where the generated worker instructions and no-mistakes' own init both
+    # still enforce it. Stopping here would also couple every launch to daemon
+    # liveness.
+    FORK_TARGET_INIT_STATUS=0
+    "$FM_ROOT/bin/fm-fork-target.sh" init "$PROJ_ABS" || FORK_TARGET_INIT_STATUS=$?
+    case "$FORK_TARGET_INIT_STATUS" in
+      0) ;;
+      4)
+        echo "warning: could not prepare the no-mistakes push target for $PROJ_ABS; no fork url is declared in this home, so the worker starts and its own instructions still resolve and check the target before pushing" >&2
+        ;;
+      *)
+        echo "error: could not refresh no-mistakes push target for $PROJ_ABS" >&2
+        exit 1
+        ;;
+    esac
   fi
   # Use the existing launch-brief overlay for every worker kind, including
   # pre-scope briefs and relaunches. Charters never enter this worker path.
