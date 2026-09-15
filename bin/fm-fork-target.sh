@@ -250,33 +250,52 @@ has_existing_fork_registration() {  # <dir>
 }
 
 registered_fork_url() {  # <dir>
+  local state
+  state=$(registered_fork_state "$1") || return 1
+  case "$state" in
+    url$'\t'*) printf '%s\n' "${state#url$'\t'}" ;;
+    *) return 1 ;;
+  esac
+}
+
+registered_fork_state() {  # <dir>, emits url<TAB><url> or origin
   local status_output
   status_output=$(cd "$1" && no-mistakes status 2>/dev/null) || return 1
   printf '%s\n' "$status_output" | awk '
-    $1 == "fork:" {
+    /^[[:space:]]*repo:[[:space:]]/ { repo=1 }
+    /^[[:space:]]*remote:[[:space:]]/ { remote=1 }
+    /^[[:space:]]*gate:[[:space:]]/ { gate=1 }
+    /^[[:space:]]*fork:[[:space:]]/ {
+      fork_rows++
       value=$0
-      sub(/^[^[:space:]]+[[:space:]]+/, "", value)
-      print value
-      found=1
-      exit
+      sub(/^[[:space:]]*fork:[[:space:]]*/, "", value)
+      fork=value
     }
-    END { exit 0 }
+    END {
+      if (!repo || !remote || !gate || fork_rows > 1 || (fork_rows == 1 && fork == "")) exit 1
+      if (fork_rows == 1) print "url\t" fork
+      else print "origin"
+    }
   '
 }
 
 fork_target_registration_matches() {  # <dir>
-  local dir=$1 resolved_status=0 resolved registered
+  local dir=$1 resolved_status=0 resolved registered_state registered
   resolved=$(resolve_fork_url "$dir" 2>/dev/null) || resolved_status=$?
   case "$resolved_status" in
     0) ;;
     1) resolved= ;;
     *) return 1 ;;
   esac
-  registered=$(registered_fork_url "$dir") || return 1
-  if [ -z "$resolved" ] && [ -z "$registered" ]; then
-    return 0
-  fi
-  [ -n "$resolved" ] && [ -n "$registered" ] && [ "$resolved" = "$registered" ]
+  registered_state=$(registered_fork_state "$dir") || return 1
+  case "$registered_state" in
+    origin) [ -z "$resolved" ] ;;
+    url$'\t'*)
+      registered=${registered_state#url$'\t'}
+      [ -n "$resolved" ] && [ "$resolved" = "$registered" ]
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 cmd_init() {  # <dir>

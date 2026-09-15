@@ -217,7 +217,7 @@ journal_field() {  # <case-dir> <id> <key>
 }
 
 install_fork_target_stub() {
-  local dir=$1 url=${2:-ssh://github.example/contributor/widget.git} registered=${3:-} status_rc=${4:-0}
+  local dir=$1 url=${2:-ssh://github.example/contributor/widget.git} registered=${3:-} status_rc=${4:-0} status_output=${5:-}
   mkdir -p "$dir/home/config"
   printf '%s\n' "$url" > "$dir/home/config/fork-url"
   cat > "$dir/fakebin/no-mistakes" <<SH
@@ -225,7 +225,12 @@ install_fork_target_stub() {
 printf '%s\n' "\$*" >> "$dir/no-mistakes-calls"
 if [ "\${1:-}" = status ]; then
   [ "$status_rc" -eq 0 ] || exit "$status_rc"
-  [ -z "$registered" ] || printf 'fork: %s\n' "$registered"
+  if [ -n "$status_output" ]; then
+    printf '%s\n' "$status_output"
+  else
+    printf '%s\n' 'repo: firstmate' 'remote: origin' 'gate: ready'
+    [ -z "$registered" ] || printf 'fork: %s\n' "$registered"
+  fi
 fi
 exit 0
 SH
@@ -449,6 +454,21 @@ test_relaunch_prepares_missing_push_target_registration() {
       "a $shape brief without the generated instruction must run target doctor"
   done
   pass "fm-control relaunch: absent and undeterminable targets refresh the push target"
+}
+
+test_relaunch_prepares_unrecognizable_push_target_status() {
+  local dir out rc calls
+  dir=$(new_case unrecognizable-gate-status rl29-unrecognized)
+  add_ship_task "$dir" rl29-unrecognized claude
+  install_fork_target_stub "$dir" ssh://github.example/contributor/new.git '' 0 'not a status block'
+  out=$(run_control "$dir" rl29-unrecognized relaunch --note "repair from incomplete status"); rc=$?
+  expect_code 0 "$rc" "an unrecognizable status relaunch should still succeed"$'\n'"$out"
+  calls=$(cat "$dir/no-mistakes-calls" 2>/dev/null || true)
+  assert_contains "$calls" "init --fork-url ssh://github.example/contributor/new.git" \
+    "an unrecognizable recorded target must prepare its push target"
+  assert_contains "$calls" "doctor" \
+    "an unrecognizable recorded target must run target doctor"
+  pass "fm-control relaunch: unrecognizable status refreshes the push target"
 }
 
 test_relaunch_refreshes_changed_push_target() {
@@ -1804,6 +1824,7 @@ test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_does_not_re_prepare_the_push_target
 test_relaunch_origin_target_match_skips_preparation
 test_relaunch_prepares_missing_push_target_registration
+test_relaunch_prepares_unrecognizable_push_target_status
 test_relaunch_refreshes_changed_push_target
 test_relaunch_advisory_no_declaration_still_launches
 test_relaunch_from_linked_home_preserves_recorded_worktree
