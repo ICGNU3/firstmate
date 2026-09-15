@@ -545,6 +545,56 @@ grep -F "init$(printf '\t')ssh://github.example/owner/second.git" "$NM_LOG" >/de
   || fail "remote no-mistakes target refresh did not run doctor for both provisions"
 pass "remote provisioning refreshes existing no-mistakes project targets"
 
+FAIL_RM_BIN="$TMP_ROOT/fail-rm-bin"
+mkdir -p "$FAIL_RM_BIN"
+REAL_RM=$(command -v rm)
+cat > "$FAIL_RM_BIN/rm" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    *.fm-secondmate-pending-no-mistakes.tmp.*) exit 1 ;;
+  esac
+done
+exec "$REAL_RM" "\$@"
+SH
+chmod +x "$FAIL_RM_BIN/rm"
+
+ROLLBACK_MARKER_MANIFEST="$TMP_ROOT/rollback-marker.manifest"
+manifest_for_no_mistakes_project "$ROLLBACK_MARKER_MANIFEST" rollback-marker-home "$NM_ORIGIN" ssh://github.example/owner/rollback.git
+ROLLBACK_MARKER_HOME="$TMP_ROOT/rollback-marker-home"
+PATH="$FAKEBIN:$PATH" FM_HOME="$ROLLBACK_MARKER_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$ROLLBACK_MARKER_MANIFEST" \
+  > "$TMP_ROOT/rollback-marker-first.out" 2>&1 \
+  || fail "could not create the existing-home rollback fixture"
+printf 'prior-pending\n' > "$TMP_ROOT/rollback-marker-before"
+cp "$TMP_ROOT/rollback-marker-before" "$ROLLBACK_MARKER_HOME/.fm-secondmate-pending-no-mistakes"
+if PATH="$FAIL_RM_BIN:$FAKEBIN:$PATH" FM_HOME="$ROLLBACK_MARKER_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$ROLLBACK_MARKER_MANIFEST" \
+  > "$TMP_ROOT/rollback-marker-failure.out" 2>&1; then
+  fail "provisioning unexpectedly succeeded after the marker rewrite failure"
+fi
+cmp -s "$TMP_ROOT/rollback-marker-before" \
+  "$ROLLBACK_MARKER_HOME/.fm-secondmate-pending-no-mistakes" \
+  || fail "rollback did not restore the existing pending marker contents"
+
+ROLLBACK_ABSENT_MANIFEST="$TMP_ROOT/rollback-absent.manifest"
+manifest_for_no_mistakes_project "$ROLLBACK_ABSENT_MANIFEST" rollback-absent-home "$NM_ORIGIN" ssh://github.example/owner/rollback-absent.git
+ROLLBACK_ABSENT_HOME="$TMP_ROOT/rollback-absent-home"
+PATH="$FAKEBIN:$PATH" FM_HOME="$ROLLBACK_ABSENT_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$ROLLBACK_ABSENT_MANIFEST" \
+  > "$TMP_ROOT/rollback-absent-first.out" 2>&1 \
+  || fail "could not create the absent-marker rollback fixture"
+assert_absent "$ROLLBACK_ABSENT_HOME/.fm-secondmate-pending-no-mistakes" \
+  "the absent-marker rollback fixture unexpectedly carried a marker"
+if PATH="$FAIL_RM_BIN:$FAKEBIN:$PATH" FM_HOME="$ROLLBACK_ABSENT_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$ROLLBACK_ABSENT_MANIFEST" \
+  > "$TMP_ROOT/rollback-absent-failure.out" 2>&1; then
+  fail "provisioning unexpectedly succeeded after the absent-marker rewrite failure"
+fi
+assert_absent "$ROLLBACK_ABSENT_HOME/.fm-secondmate-pending-no-mistakes" \
+  "rollback recreated a pending marker that was absent before provisioning"
+pass "remote provisioning rollback restores pending marker state"
+
 RETRY_HOME="$TMP_ROOT/no-mistakes-retry-home"
 rm -f "$TMP_ROOT/no-mistakes-init-failed"
 manifest_for_no_mistakes_project "$TMP_ROOT/no-mistakes-retry.manifest" no-mistakes-retry-home "$NM_ORIGIN" ssh://github.example/owner/retry.git

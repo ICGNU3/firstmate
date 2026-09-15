@@ -123,6 +123,7 @@ rollback() {
       restore_owned_file config/fork-url || true
       restore_owned_file .fm-secondmate-home || true
       restore_owned_file .fm-secondmate-parent || true
+      restore_owned_file "$PENDING_NO_MISTAKES_MARKER" || true
       [ "$CREATED_BACKLOG" -eq 0 ] || rm -f -- "$FM_HOME/data/backlog.md"
     fi
   fi
