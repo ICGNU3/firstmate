@@ -23,6 +23,7 @@
 # Known provisioning failure rolls the registry back. SSH status 255 preserves
 # the route and any newly scaffolded brief because completion is unknown and a same-route rerun converges.
 set -eu
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -153,9 +154,14 @@ FORK_URL_PRESENT=$(fm_config_source_present "$CONFIG/fork-url") \
   || die "cannot inspect config/fork-url"
 FORK_URL_B64=
 if [ "$FORK_URL_PRESENT" = 1 ]; then
-  [ -f "$CONFIG/fork-url" ] && [ ! -L "$CONFIG/fork-url" ] \
+  fm_config_source_dir_safe "$CONFIG" \
+    || die "config/fork-url source config directory is unsafe: $CONFIG"
+  [ -f "$CONFIG/fork-url" ] && [ ! -L "$CONFIG/fork-url" ] && [ -r "$CONFIG/fork-url" ] \
     || die "config/fork-url is not a regular file"
-  FORK_URL_B64=$(encode < "$CONFIG/fork-url")
+  FORK_URL_B64=$(encode < "$CONFIG/fork-url") \
+    || die "could not read config/fork-url"
+elif ! fm_config_source_dir_safe "$CONFIG"; then
+  die "config/fork-url source config directory is unsafe: $CONFIG"
 fi
 
 # Keep the parent charter as its durable source, but publish a remote copy whose

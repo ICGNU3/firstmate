@@ -275,6 +275,23 @@ manifest_for_url() { # <file> <id> <legacy|absent|empty|value>
   } > "$file"
 }
 
+manifest_for_no_mistakes_project() { # <file> <id> <origin> <fork-url>
+  local file=$1 id=$2 origin=$3 fork_url=$4
+  {
+    printf 'schema=fm-remote-home-provision.v1\n'
+    printf 'id_b64=%s\n' "$(printf '%s' "$id" | base64 | tr -d '\n')"
+    printf 'charter_b64=%s\n' "$(printf 'No-mistakes project charter.\n' | base64 | tr -d '\n')"
+    printf 'fork_url_present=1\n'
+    printf 'fork_url_b64=%s\n' "$(printf '%s\n' "$fork_url" | base64 | tr -d '\n')"
+    printf 'project_count=1\n'
+    printf 'project=%s|%s|%s|%s\n' \
+      "$(printf 'alpha-nm' | base64 | tr -d '\n')" \
+      "$(printf '%s' "$origin" | base64 | tr -d '\n')" \
+      "$(printf '%s' '- alpha-nm - no-mistakes project (added 2026-09-15)' | base64 | tr -d '\n')" \
+      "$(printf '%s' no-mistakes | base64 | tr -d '\n')"
+  } > "$file"
+}
+
 publish_healthy_watcher_identity() { # <state> <home> <watch-script>
   local state=$1 home=$2 watch=$3 identity
   identity=$(FM_HOME="$PARENT" FM_STATE_OVERRIDE="$PARENT/state" /bin/bash -c \
@@ -477,6 +494,87 @@ if FM_HOME="$TMP_ROOT/url-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
 fi
 [ "$(cat "$TMP_ROOT/url-value-home/config/fork-url")" = 'ssh://git@github.example/contributor/widget.git' ] \
   || fail "an undecodable fork-url payload erased an existing setting"
+NM_ORIGIN="$TMP_ROOT/no-mistakes-origin.git"
+NM_SOURCE="$TMP_ROOT/no-mistakes-source"
+git init -q -b main "$NM_SOURCE"
+git -C "$NM_SOURCE" config user.email test@example.com
+git -C "$NM_SOURCE" config user.name Test
+printf 'no-mistakes project\n' > "$NM_SOURCE/README.md"
+git -C "$NM_SOURCE" add README.md
+git -C "$NM_SOURCE" commit -qm initial
+git clone -q --bare "$NM_SOURCE" "$NM_ORIGIN"
+NM_HOME="$TMP_ROOT/no-mistakes-home"
+NM_LOG="$TMP_ROOT/no-mistakes.log"
+cat > "$FAKEBIN/no-mistakes" <<SH
+#!/usr/bin/env bash
+set -eu
+if [ "\${1:-}" = init ]; then
+  printf '%s\t%s\t%s\n' "\$PWD" "\$1" "\$(cat "\$FM_HOME/config/fork-url")" >> "$NM_LOG"
+  if [ "\${2:-}" = --fork-url ]; then
+    git remote remove no-mistakes >/dev/null 2>&1 || true
+    git remote add no-mistakes "\$3"
+  else
+    git remote remove no-mistakes >/dev/null 2>&1 || true
+    git remote add no-mistakes "\$(git remote get-url origin)"
+  fi
+else
+  printf '%s\t%s\n' "\$PWD" "\${1:-}" >> "$NM_LOG"
+fi
+SH
+chmod +x "$FAKEBIN/no-mistakes"
+manifest_for_no_mistakes_project "$TMP_ROOT/no-mistakes-first.manifest" no-mistakes-home "$NM_ORIGIN" ssh://github.example/owner/first.git
+PATH="$FAKEBIN:$PATH" FM_HOME="$NM_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/no-mistakes-first.manifest" \
+  > "$TMP_ROOT/no-mistakes-first.out" 2>&1 \
+  || fail "remote provisioning did not initialize the new no-mistakes project"
+manifest_for_no_mistakes_project "$TMP_ROOT/no-mistakes-second.manifest" no-mistakes-home "$NM_ORIGIN" ssh://github.example/owner/second.git
+PATH="$FAKEBIN:$PATH" FM_HOME="$NM_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/no-mistakes-second.manifest" \
+  > "$TMP_ROOT/no-mistakes-second.out" 2>&1 \
+  || fail "remote provisioning did not refresh the existing no-mistakes project"
+grep -F "init$(printf '\t')ssh://github.example/owner/first.git" "$NM_LOG" >/dev/null \
+  || fail "new remote no-mistakes project was not initialized against its configured target"
+grep -F "init$(printf '\t')ssh://github.example/owner/second.git" "$NM_LOG" >/dev/null \
+  || fail "existing remote no-mistakes project was not refreshed against its configured target"
+[ "$(grep -c "$(printf '\t')doctor$" "$NM_LOG")" -eq 2 ] \
+  || fail "remote no-mistakes target refresh did not run doctor for both provisions"
+pass "remote provisioning refreshes existing no-mistakes project targets"
+
+mv "$TMP_ROOT/seed-parent/config" "$TMP_ROOT/seed-parent/config-real"
+ln -s "$TMP_ROOT/seed-parent/config-real" "$TMP_ROOT/seed-parent/config"
+if FM_SECONDMATE_CHARTER='Symlinked config charter.' FM_SECONDMATE_SCOPE='symlinked config' \
+  seed_env "$ROOT/bin/fm-remote-home-seed.sh" symlinked-config remote-mac "$REMOTE_ROOT" \
+  "$TMP_ROOT/symlinked-config-home" --no-projects > "$TMP_ROOT/symlinked-config.out" 2>&1; then
+  fail "remote seed followed a symlinked source config directory"
+fi
+assert_grep 'source config directory is unsafe' "$TMP_ROOT/symlinked-config.out" \
+  "remote seed did not reject the symlinked source config directory"
+rm -f "$TMP_ROOT/seed-parent/config"
+mv "$TMP_ROOT/seed-parent/config-real" "$TMP_ROOT/seed-parent/config"
+
+real_base64=$(command -v base64)
+cat > "$FAKEBIN/base64" <<SH
+#!/usr/bin/env bash
+if [ "\${FM_FAKE_BASE64_FAIL_FIRST:-0}" = 1 ] && [ ! -e "$TMP_ROOT/base64-failed" ]; then
+  touch "$TMP_ROOT/base64-failed"
+  exit 1
+fi
+exec "$real_base64" "\$@"
+SH
+chmod +x "$FAKEBIN/base64"
+rm -f "$TMP_ROOT/base64-failed" "$TMP_ROOT/read-failure.manifest"
+if PATH="$FAKEBIN:$PATH" FM_FAKE_BASE64_FAIL_FIRST=1 \
+  FM_FAKE_PROVISION_MANIFEST="$TMP_ROOT/read-failure.manifest" \
+  FM_SECONDMATE_CHARTER='Read failure charter.' FM_SECONDMATE_SCOPE='read failure' \
+  seed_env "$ROOT/bin/fm-remote-home-seed.sh" read-failure remote-mac "$REMOTE_ROOT" \
+  "$TMP_ROOT/read-failure-home" --no-projects > "$TMP_ROOT/read-failure.out" 2>&1; then
+  fail "remote seed converted a fork-url read failure into a manifest"
+fi
+assert_grep 'could not read config/fork-url' "$TMP_ROOT/read-failure.out" \
+  "remote seed did not report the fork-url read failure"
+assert_absent "$TMP_ROOT/read-failure.manifest" \
+  "remote seed published a manifest after a fork-url read failure"
+rm -f "$FAKEBIN/base64"
 pass "remote provisioning preserves target declaration states"
 if [ "${FM_TEST_PROVISION_ONLY:-0}" = 1 ]; then
   echo "ALL TESTS PASSED"

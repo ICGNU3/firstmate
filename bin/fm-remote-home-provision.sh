@@ -255,19 +255,24 @@ EOF
   case "$MODE" in no-mistakes|direct-PR) ;; *) die "project $NAME has unsupported remote mode: $MODE" ;; esac
   case "$REGISTRY_LINE" in "- $NAME "*) ;; *) die "project $NAME registry line is malformed" ;; esac
   DEST="$FM_HOME/projects/$NAME"
+  PROJECT_CREATED=0
   if [ -e "$DEST" ] || [ -L "$DEST" ]; then
     [ -d "$DEST" ] && [ ! -L "$DEST" ] && [ -d "$DEST/.git" ] \
       || die "project destination exists but is not a safe clone: $DEST"
     EXISTING_ORIGIN=$(git -C "$DEST" remote get-url origin 2>/dev/null || true)
     [ "$EXISTING_ORIGIN" = "$ORIGIN" ] || die "project $NAME origin differs from the requested route"
   else
+    PROJECT_CREATED=1
     printf '%s\n' "$NAME" >> "$CREATED_PROJECTS"
     git clone --quiet -- "$ORIGIN" "$DEST" || die "could not clone project $NAME on the remote host"
-    if [ "$MODE" = no-mistakes ]; then
-      command -v no-mistakes >/dev/null 2>&1 || die "no-mistakes is unavailable for project $NAME"
-      FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fork-target.sh" init "$DEST" >/dev/null \
-        || die "no-mistakes initialization failed for project $NAME"
+  fi
+  if [ "$MODE" = no-mistakes ]; then
+    if [ "$PROJECT_CREATED" -eq 0 ] && ! git -C "$DEST" remote get-url no-mistakes >/dev/null 2>&1; then
+      die "existing no-mistakes project $NAME is not initialized"
     fi
+    command -v no-mistakes >/dev/null 2>&1 || die "no-mistakes is unavailable for project $NAME"
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fork-target.sh" init "$DEST" >/dev/null \
+      || die "no-mistakes initialization failed for project $NAME"
   fi
   printf '%s\n' "$REGISTRY_LINE" >> "$PROJECT_REG"
 done < <(grep '^project=' "$TMP/manifest")

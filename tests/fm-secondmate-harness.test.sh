@@ -434,6 +434,18 @@ test_propagate_lib() {
   assert_contains "$err_text" "primary source is a symlink" \
     "the symlinked fork-url reason must be concrete"
 
+  rm -f "$src/fork-url"
+  mv "$src" "$d/source-config-real"
+  ln -s "$d/source-config-real" "$src"
+  stderr="$d/config-dir-symlink.err"
+  if FM_INHERITABLE_CONFIG=fork-url propagate_inheritable_config "$src" "$d/home2/config" 2>"$stderr"; then
+    fail "a symlinked primary config directory should fail inheritance"
+  fi
+  err_text=$(cat "$stderr")
+  assert_contains "$err_text" "fork-url" "the config-directory rejection must name the setting"
+  assert_contains "$err_text" "primary config directory is a symlink" \
+    "the config-directory rejection must name the concrete reason"
+
   pass "B1 propagate_inheritable_config: copy, idempotence, convergence, absence-mirror, exclusion, no-op, skip diagnostics"
 }
 

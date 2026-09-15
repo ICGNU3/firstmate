@@ -104,6 +104,13 @@ fm_config_source_present() {
   ' -- "$1"
 }
 
+fm_config_source_dir_safe() {
+  local dir=${1:-}
+  [ -n "$dir" ] || return 1
+  [ ! -L "$dir" ] || return 1
+  [ ! -e "$dir" ] || [ -d "$dir" ]
+}
+
 fm_inherit_file_mode() {
   if [ "$(uname)" = Darwin ]; then
     /usr/bin/stat -f %Lp "$1" 2>/dev/null
@@ -455,6 +462,18 @@ propagate_inheritable_config() {
   local src_config=$1 dest_config=$2 item src dest source_present reason rc
   [ -n "$src_config" ] || return 1
   [ -n "$dest_config" ] || return 1
+  if ! fm_config_source_dir_safe "$src_config"; then
+    if [ -L "$src_config" ]; then
+      reason="primary config directory is a symlink"
+    else
+      reason="primary config directory is not a directory"
+    fi
+    for item in $FM_INHERITABLE_CONFIG; do
+      warn_inheritable_config_error "$item" "$src_config" "$reason"
+      record_inheritable_config_result "$item" error "$reason"
+    done
+    return 1
+  fi
   rc=0
   for item in $FM_INHERITABLE_CONFIG; do
     case "$item" in

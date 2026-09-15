@@ -1142,7 +1142,7 @@ test_home_seed_resolves_relative_source_origins() {
   pass "home seeding resolves relative source origins against the source project"
 }
 
-test_home_seed_skips_initialized_existing_no_mistakes_projects() {
+test_home_seed_refreshes_initialized_existing_no_mistakes_projects() {
   local home subhome err fakebin log origin
   home="$TMP_ROOT/existing-initialized-home"
   subhome="$TMP_ROOT/existing-initialized-subhome"
@@ -1169,15 +1169,17 @@ test_home_seed_skips_initialized_existing_no_mistakes_projects() {
   fi
   grep -F 'failed to initialize no-mistakes for beta' "$err" >/dev/null \
     || fail "seed did not explain later no-mistakes initialization failure"
-  grep -F "$subhome/projects/alpha" "$log" >/dev/null \
-    && fail "seed ran no-mistakes against an initialized existing clone"
-  [ ! -f "$subhome/projects/alpha/.no-mistakes-init" ] || fail "seed mutated initialized existing clone with no-mistakes init"
-  [ ! -f "$subhome/projects/alpha/.no-mistakes-doctor" ] || fail "seed mutated initialized existing clone with no-mistakes doctor"
+  grep -F "$subhome/projects/alpha$(printf '\t')init" "$log" >/dev/null \
+    || fail "seed did not refresh the initialized existing clone"
+  grep -F "$subhome/projects/alpha$(printf '\t')doctor" "$log" >/dev/null \
+    || fail "seed did not run the target doctor for the initialized existing clone"
+  [ -f "$subhome/projects/alpha/.no-mistakes-init" ] || fail "seed did not refresh the existing clone's gate"
+  [ -f "$subhome/projects/alpha/.no-mistakes-doctor" ] || fail "seed did not doctor the existing clone's gate"
   [ ! -e "$subhome/projects/beta" ] || fail "failed seed left a newly cloned project after no-mistakes failure"
-  pass "home seeding skips initialized existing no-mistakes clones"
+  pass "home seeding refreshes initialized existing no-mistakes clones"
 }
 
-test_home_seed_inherits_fork_url_before_skipping_initialized_existing_project() {
+test_home_seed_inherits_fork_url_before_refreshing_initialized_existing_project() {
   local home subhome fakebin log origin expected actual
   home="$TMP_ROOT/existing-initialized-fork-url-home"
   subhome="$TMP_ROOT/existing-initialized-fork-url-subhome"
@@ -1203,8 +1205,11 @@ test_home_seed_inherits_fork_url_before_skipping_initialized_existing_project() 
   actual=$(cat "$subhome/config/fork-url")
   [ "$actual" = "$expected" ] \
     || fail "initialized existing clone did not receive the parent's fork-url"
-  [ ! -s "$log" ] || fail "seed ran no-mistakes against an initialized existing clone"
-  pass "home seeding inherits fork-url before skipping initialized existing clones"
+  grep -F "$subhome/projects/alpha$(printf '\t')init" "$log" >/dev/null \
+    || fail "seed did not refresh the initialized existing fork target"
+  grep -F "$subhome/projects/alpha$(printf '\t')doctor" "$log" >/dev/null \
+    || fail "seed did not doctor the initialized existing fork target"
+  pass "home seeding inherits fork-url before refreshing initialized existing clones"
 }
 
 test_home_seed_inherits_fork_url_for_direct_pr_project() {
@@ -3042,8 +3047,8 @@ test_home_seed_refuses_home_overlapping_registered_home
 test_home_seed_refuses_remote_backed_project_without_origin
 test_home_seed_refuses_existing_remote_backed_project_with_wrong_origin
 test_home_seed_resolves_relative_source_origins
-test_home_seed_skips_initialized_existing_no_mistakes_projects
-test_home_seed_inherits_fork_url_before_skipping_initialized_existing_project
+test_home_seed_refreshes_initialized_existing_no_mistakes_projects
+test_home_seed_inherits_fork_url_before_refreshing_initialized_existing_project
 test_home_seed_inherits_fork_url_for_direct_pr_project
 test_home_seed_refuses_uninitialized_existing_no_mistakes_project
 test_home_seed_refuses_project_destinations_outside_subhome
