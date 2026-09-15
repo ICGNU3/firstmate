@@ -142,7 +142,7 @@ test_control_bytes_are_refused_without_init() {
 }
 
 test_malformed_declaration_is_refused() {
-  local d status out err; d=$(new_case malformed-url)
+  local d status out err hex; d=$(new_case malformed-url)
   make_fakebin "$d" >/dev/null
   printf 'ssh://github.example/contributor/widget.git\nsecond-line\n' > "$d/home/config/fork-url"
   status=0; out=$(resolve "$d" 2>"$d/err") || status=$?
@@ -151,6 +151,8 @@ test_malformed_declaration_is_refused() {
   err=$(cat "$d/err")
   assert_contains "$err" "config/fork-url" "the malformed setting must be named"
   assert_contains "$err" "exactly one line" "the malformed shape must be stated"
+  hex=$(od -An -tx1 -v "$d/home/config/fork-url" | tr -d '[:space:]')
+  assert_contains "$err" "hex: $hex" "the malformed diagnostic must identify the complete value safely"
   pass "multi-line config/fork-url declarations fail closed"
 }
 
@@ -158,7 +160,7 @@ test_malformed_declaration_is_refused() {
 # when it captured bytes, so a second line WITHOUT a final newline is the shape
 # a status-only check silently accepts.
 test_unterminated_second_line_is_refused() {
-  local d status out err; d=$(new_case unterminated-second-line)
+  local d status out err hex; d=$(new_case unterminated-second-line)
   make_fakebin "$d" >/dev/null
   printf 'ssh://github.example/contributor/widget.git\nsecond-line' > "$d/home/config/fork-url"
   status=0; out=$(resolve "$d" 2>"$d/err") || status=$?
@@ -167,6 +169,8 @@ test_unterminated_second_line_is_refused() {
   err=$(cat "$d/err")
   assert_contains "$err" "config/fork-url" "the malformed setting must be named"
   assert_contains "$err" "exactly one line" "the malformed shape must be stated"
+  hex=$(od -An -tx1 -v "$d/home/config/fork-url" | tr -d '[:space:]')
+  assert_contains "$err" "hex: $hex" "the malformed diagnostic must identify the complete value safely"
   pass "a second line without a final newline fails closed"
 }
 

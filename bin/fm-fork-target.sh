@@ -95,14 +95,22 @@ config_token() {  # <name>
     my $bytes = <$fh>;
     defined $bytes or observe_error("read failed");
     close $fh or observe_error("read failed: $!");
+    my $raw_bytes = $bytes;
+    sub hex_render {
+      my ($bytes) = @_;
+      my $limit = 4096;
+      my $truncated = length($bytes) > $limit;
+      my $shown = $truncated ? substr($bytes, 0, $limit) : $bytes;
+      my $hex = unpack("H*", $shown);
+      return $truncated ? "$hex... (truncated)" : $hex;
+    }
     if ($bytes =~ /[\x00-\x09\x0B-\x1F\x7F]/) {
-      printf STDERR "error: %s value (hex: %s) is unusable: it contains a NUL or control byte\n", $label, unpack("H*", $bytes);
+      printf STDERR "error: %s value (hex: %s) is unusable: it contains a NUL or control byte\n", $label, hex_render($bytes);
       exit 4;
     }
     $bytes =~ s/\n\z//;
     if ($bytes =~ /\n/) {
-      my ($first) = split /\n/, $bytes, 2;
-      print $first;
+      printf STDERR "error: %s value (hex: %s) is unusable: it must contain exactly one line\n", $label, hex_render($raw_bytes);
       exit 3;
     }
     print $bytes;
@@ -200,9 +208,7 @@ resolve_fork_url() {  # <dir>
     [ "$config_status" -eq 1 ] && return 1
     case "$config_status" in
       2) ;;
-      3)
-        printf 'error: config/fork-url value %s is unusable: it must contain exactly one line\n' "$declared" >&2
-        ;;
+      3) ;;
       4) ;;
       *)
         printf 'error: config/fork-url is unusable: its contents could not be classified\n' >&2

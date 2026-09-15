@@ -216,7 +216,12 @@ journal_field() {  # <case-dir> <id> <key>
   grep "^$3=" "$1/home/state/$2.control-relaunch" | tail -1 | cut -d= -f2-
 }
 
-append_current_push_target_instruction() {
+mark_current_push_target_meta() {
+  local dir=$1 id=$2
+  printf 'push_target_instruction=1\n' >> "$dir/home/state/$id.meta"
+}
+
+append_generated_looking_push_target_instruction() {
   local dir=$1 id=$2 home_q resolver_q
   home_q=$(printf '%q' "$dir/home")
   resolver_q=$(printf '%q' "$ROOT/bin/fm-fork-target.sh")
@@ -404,7 +409,7 @@ test_relaunch_does_not_re_prepare_the_push_target() {
   local dir out rc calls
   dir=$(new_case no-gate-prep rl29)
   add_ship_task "$dir" rl29 claude
-  append_current_push_target_instruction "$dir" rl29
+  mark_current_push_target_meta "$dir" rl29
   cat > "$dir/fakebin/no-mistakes" <<SH
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$dir/no-mistakes-calls"
@@ -421,28 +426,34 @@ SH
     "a relaunch must not run no-mistakes doctor on the recovery path"
   assert_not_contains "$out" "fork target:" \
     "a relaunch must not report push-target resolution at all"
+  [ "$(meta_field "$dir" rl29 push_target_instruction)" = 1 ] \
+    || fail "a current task must retain its metadata-owned push-target instruction marker"
   pass "fm-control relaunch: an already prepared push target is not re-prepared"
 }
 
 test_relaunch_prepares_missing_push_target_instruction() {
   local dir out rc calls shape
-  for shape in legacy prose-only; do
+  for shape in legacy prose-only counterfeit; do
     dir=$(new_case "missing-gate-prep-$shape" "rl29-$shape")
     add_ship_task "$dir" "rl29-$shape" claude
     install_fork_target_stub "$dir"
     if [ "$shape" = prose-only ]; then
       printf '\n# Notes\nThis note mentions bin/fm-fork-target.sh but is not a delivery instruction.\n' \
         >> "$dir/home/data/rl29-$shape/brief.md"
+    elif [ "$shape" = counterfeit ]; then
+      append_generated_looking_push_target_instruction "$dir" "rl29-$shape"
     fi
     out=$(run_control "$dir" "rl29-$shape" relaunch --note "repair a legacy push target"); rc=$?
     expect_code 0 "$rc" "a $shape relaunch should still succeed"$'\n'"$out"
     calls=$(cat "$dir/no-mistakes-calls" 2>/dev/null || true)
     assert_contains "$calls" "init --fork-url ssh://github.example/contributor/widget.git" \
-      "a $shape brief without the generated instruction must prepare its push target"
+      "a $shape task without the metadata field must prepare its push target"
     assert_contains "$calls" "doctor" \
       "a $shape brief without the generated instruction must run target doctor"
+    [ -z "$(meta_field "$dir" "rl29-$shape" push_target_instruction)" ] \
+      || fail "a $shape relaunch must not mark a stale brief as carrying the resolver instruction"
   done
-  pass "fm-control relaunch: legacy and prose-only briefs refresh missing push-target instructions"
+  pass "fm-control relaunch: legacy, prose-only, and counterfeit briefs refresh missing instructions"
 }
 
 test_relaunch_from_linked_home_preserves_recorded_worktree() {
