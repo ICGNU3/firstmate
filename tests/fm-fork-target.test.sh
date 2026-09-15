@@ -121,7 +121,7 @@ test_unreadable_declaration_is_refused_without_init() {
 }
 
 test_control_bytes_are_refused_without_init() {
-  local d status out err; d=$(new_case control-byte-url)
+  local d status out err hex; d=$(new_case control-byte-url)
   make_fakebin "$d" >/dev/null
   set_origin "$d" https://github.com/acme/widget.git
   printf 'ssh://github.example/contributor/widget.git' > "$d/home/config/fork-url"
@@ -134,6 +134,8 @@ test_control_bytes_are_refused_without_init() {
   err=$(cat "$d/err")
   assert_contains "$err" "config/fork-url" "the control-byte setting must be named"
   assert_contains "$err" "NUL or control byte" "the control-byte reason must be stated"
+  hex=$(od -An -tx1 -v "$d/home/config/fork-url" | tr -d '[:space:]')
+  assert_contains "$err" "hex: $hex" "the control-byte diagnostic must identify the value safely"
   assert_not_contains "$(cat "$d/nm.log")" "init" \
     "a control-byte declaration must not invoke no-mistakes init"
   pass "config/fork-url control bytes fail before shell storage or init"

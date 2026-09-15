@@ -63,26 +63,26 @@ usage() {
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
 config_token() {  # <name>
-  local path="$CONFIG/$1" state raw_status
-  config_path_state "$1" "$CONFIG"; state=$?
+  local path="$CONFIG/$1" label="config/$1" state raw_status
+  config_path_state "$label" "$CONFIG"; state=$?
   case "$state" in
     0) ;;
     1) return 1 ;;
     *) return 2 ;;
   esac
-  [ -d "$CONFIG" ] || { config_observe_error "$1" "$CONFIG" "path is not a directory"; return 2; }
-  [ ! -L "$CONFIG" ] || { config_observe_error "$1" "$CONFIG" "configuration directory is a symlink"; return 2; }
-  [ -r "$CONFIG" ] || { config_observe_error "$1" "$CONFIG" "configuration directory is not readable"; return 2; }
-  [ -x "$CONFIG" ] || { config_observe_error "$1" "$CONFIG" "configuration directory is not searchable"; return 2; }
-  config_path_state "$1" "$path"; state=$?
+  [ -d "$CONFIG" ] || { config_observe_error "$label" "$CONFIG" "path is not a directory"; return 2; }
+  [ ! -L "$CONFIG" ] || { config_observe_error "$label" "$CONFIG" "configuration directory is a symlink"; return 2; }
+  [ -r "$CONFIG" ] || { config_observe_error "$label" "$CONFIG" "configuration directory is not readable"; return 2; }
+  [ -x "$CONFIG" ] || { config_observe_error "$label" "$CONFIG" "configuration directory is not searchable"; return 2; }
+  config_path_state "$label" "$path"; state=$?
   case "$state" in
     0) ;;
     1) return 1 ;;
     *) return 2 ;;
   esac
-  [ -f "$path" ] || { config_observe_error "$1" "$path" "path is not a regular file"; return 2; }
-  [ ! -L "$path" ] || { config_observe_error "$1" "$path" "declaration is a symlink"; return 2; }
-  [ -r "$path" ] || { config_observe_error "$1" "$path" "declaration is not readable"; return 2; }
+  [ -f "$path" ] || { config_observe_error "$label" "$path" "path is not a regular file"; return 2; }
+  [ ! -L "$path" ] || { config_observe_error "$label" "$path" "declaration is a symlink"; return 2; }
+  [ -r "$path" ] || { config_observe_error "$label" "$path" "declaration is not readable"; return 2; }
   perl -e '
     my ($label, $path) = @ARGV;
     sub observe_error {
@@ -95,7 +95,10 @@ config_token() {  # <name>
     my $bytes = <$fh>;
     defined $bytes or observe_error("read failed");
     close $fh or observe_error("read failed: $!");
-    exit 4 if $bytes =~ /[\x00-\x09\x0B-\x1F\x7F]/;
+    if ($bytes =~ /[\x00-\x09\x0B-\x1F\x7F]/) {
+      printf STDERR "error: %s value (hex: %s) is unusable: it contains a NUL or control byte\n", $label, unpack("H*", $bytes);
+      exit 4;
+    }
     $bytes =~ s/\n\z//;
     if ($bytes =~ /\n/) {
       my ($first) = split /\n/, $bytes, 2;
@@ -103,7 +106,7 @@ config_token() {  # <name>
       exit 3;
     }
     print $bytes;
-  ' -- "$1" "$path"
+  ' -- "$label" "$path"
   raw_status=$?
   case "$raw_status" in
     0|3|4) return "$raw_status" ;;
@@ -200,9 +203,7 @@ resolve_fork_url() {  # <dir>
       3)
         printf 'error: config/fork-url value %s is unusable: it must contain exactly one line\n' "$declared" >&2
         ;;
-      4)
-        printf 'error: config/fork-url is unusable: it contains a NUL or control byte\n' >&2
-        ;;
+      4) ;;
       *)
         printf 'error: config/fork-url is unusable: its contents could not be classified\n' >&2
         ;;

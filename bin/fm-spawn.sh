@@ -2520,6 +2520,15 @@ fi
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
   exit 1
 }
+fm_brief_has_push_target_instruction() {
+  awk '
+    /^# Definition of done$/ { in_dod=1; next }
+    in_dod && /^# / { in_dod=0; no_mistakes=0 }
+    in_dod && /^Delivery contract: mode=no-mistakes$/ { no_mistakes=1; next }
+    no_mistakes && /`FM_HOME=[^`]+\/bin\/fm-fork-target\.sh init \.`/ { found=1; exit }
+    END { exit !found }
+  ' "$1"
+}
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   if fm_brief_task_placeholders_present "$BRIEF"; then
     echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
@@ -2550,7 +2559,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     # recovers a stuck worker. The worker's own generated instructions run the
     # resolver before starting the gate, which is where a declaration changed
     # mid-task is picked up anyway.
-    if [ "$RELAUNCH" -eq 0 ]; then
+    if [ "$RELAUNCH" -eq 0 ] || ! fm_brief_has_push_target_instruction "$BRIEF"; then
       # Discriminate the resolver's init status rather than treating every
       # failure as fatal. A declared target we cannot use, or a resolution
       # error, still stops the spawn. A home with no declaration pushes to

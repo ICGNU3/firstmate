@@ -216,6 +216,30 @@ journal_field() {  # <case-dir> <id> <key>
   grep "^$3=" "$1/home/state/$2.control-relaunch" | tail -1 | cut -d= -f2-
 }
 
+append_current_push_target_instruction() {
+  local dir=$1 id=$2 home_q resolver_q
+  home_q=$(printf '%q' "$dir/home")
+  resolver_q=$(printf '%q' "$ROOT/bin/fm-fork-target.sh")
+  cat >> "$dir/home/data/$id/brief.md" <<EOF
+
+# Definition of done
+Delivery contract: mode=no-mistakes
+Before starting /no-mistakes, run \`FM_HOME=$home_q $resolver_q init .\`; if it exits non-zero, stop and report the resolver or initialization error instead of starting the gate.
+EOF
+}
+
+install_fork_target_stub() {
+  local dir=$1 url='ssh://github.example/contributor/widget.git'
+  mkdir -p "$dir/home/config"
+  printf '%s\n' "$url" > "$dir/home/config/fork-url"
+  cat > "$dir/fakebin/no-mistakes" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/no-mistakes-calls"
+exit 0
+SH
+  chmod +x "$dir/fakebin/no-mistakes"
+}
+
 make_git_failure_stub() {  # <case-dir>
   cat > "$1/fakebin/git" <<'SH'
 #!/usr/bin/env bash
@@ -380,6 +404,7 @@ test_relaunch_does_not_re_prepare_the_push_target() {
   local dir out rc calls
   dir=$(new_case no-gate-prep rl29)
   add_ship_task "$dir" rl29 claude
+  append_current_push_target_instruction "$dir" rl29
   cat > "$dir/fakebin/no-mistakes" <<SH
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$dir/no-mistakes-calls"
@@ -397,6 +422,27 @@ SH
   assert_not_contains "$out" "fork target:" \
     "a relaunch must not report push-target resolution at all"
   pass "fm-control relaunch: an already prepared push target is not re-prepared"
+}
+
+test_relaunch_prepares_missing_push_target_instruction() {
+  local dir out rc calls shape
+  for shape in legacy prose-only; do
+    dir=$(new_case "missing-gate-prep-$shape" "rl29-$shape")
+    add_ship_task "$dir" "rl29-$shape" claude
+    install_fork_target_stub "$dir"
+    if [ "$shape" = prose-only ]; then
+      printf '\n# Notes\nThis note mentions bin/fm-fork-target.sh but is not a delivery instruction.\n' \
+        >> "$dir/home/data/rl29-$shape/brief.md"
+    fi
+    out=$(run_control "$dir" "rl29-$shape" relaunch --note "repair a legacy push target"); rc=$?
+    expect_code 0 "$rc" "a $shape relaunch should still succeed"$'\n'"$out"
+    calls=$(cat "$dir/no-mistakes-calls" 2>/dev/null || true)
+    assert_contains "$calls" "init --fork-url ssh://github.example/contributor/widget.git" \
+      "a $shape brief without the generated instruction must prepare its push target"
+    assert_contains "$calls" "doctor" \
+      "a $shape brief without the generated instruction must run target doctor"
+  done
+  pass "fm-control relaunch: legacy and prose-only briefs refresh missing push-target instructions"
 }
 
 test_relaunch_from_linked_home_preserves_recorded_worktree() {
@@ -1714,6 +1760,7 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_does_not_re_prepare_the_push_target
+test_relaunch_prepares_missing_push_target_instruction
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication
