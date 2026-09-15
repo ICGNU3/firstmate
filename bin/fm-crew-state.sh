@@ -401,6 +401,11 @@ nm_steps_rows() {
   '
 }
 
+nm_steps_declared_count() {
+  printf '%s\n' "$RUN_OUT" | sed -n \
+    's/^[[:space:]]*steps\[\([0-9][0-9]*\)\]{.*$/\1/p' | head -1
+}
+
 NM_VALIDATION_STEPS="review test document lint"
 
 nm_validation_steps_complete() {
@@ -532,11 +537,15 @@ nm_step_is_delivery() {  # <step>
 # only read, and the run was recorded with the same "run failed" string as a run
 # whose validation failed.
 nm_failed_run_is_delivery_failure() {
-  local rows row rest step status seen_failure=0
+  local rows row rest step status seen_failure=0 declared_rows parsed_rows
   NM_DELIVERY_FAILED_STEP=""
   nm_validation_steps_complete || return 1
   rows=$(nm_steps_rows)
   [ -n "$rows" ] || return 1
+  declared_rows=$(nm_steps_declared_count)
+  case "$declared_rows" in ''|*[!0-9]*) return 1 ;; esac
+  parsed_rows=$(printf '%s\n' "$rows" | awk 'NF { count++ } END { print count + 0 }')
+  [ "$declared_rows" -eq "$parsed_rows" ] || return 1
   while IFS= read -r row; do
     row=$(trim "$row")
     [ -n "$row" ] || continue

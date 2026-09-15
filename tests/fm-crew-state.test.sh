@@ -491,6 +491,26 @@ steps[9]{step,status,findings,duration_ms}:
 EOF
 }
 
+run_failed_push_truncated() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: failed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  findings: none
+outcome: failed
+steps[9]{step,status,findings,duration_ms}:
+  intent,completed,0,0
+  rebase,completed,0,0
+  review,completed,0,0
+  test,completed,0,0
+  document,completed,0,0
+  lint,completed,0,0
+  push,failed,0,412
+EOF
+}
+
 # A validation step failed BEFORE delivery: the work itself is wrong, so this
 # must keep the plain failed reading.
 run_failed_lint() {  # <branch>
@@ -1126,6 +1146,20 @@ test_terminal_failed_push_without_validation_stays_plain_failed() {
   assert_contains "$out" "run failed" "missing validation evidence keeps the plain failure string"
   assert_not_contains "$out" "delivery failed" "missing validation evidence must not be labeled delivery"
   pass "a delivery-shaped failure without validation evidence stays unclassified"
+}
+
+test_terminal_failed_push_with_truncated_steps_stays_plain_failed() {
+  reset_fakes
+  local d; d=$(new_case failed-push-truncated)
+  make_repo_on_branch "$d/wt" fm/feat-push-truncated
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-push-truncated.meta" "window=fm:fm-feat-push-truncated" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_failed_push_truncated fm/feat-push-truncated)"
+  local out; out=$(run_crew_state "$d" feat-push-truncated)
+  assert_contains "$out" "state: failed" "a truncated delivery ledger stays failed"
+  assert_contains "$out" "run failed" "an incomplete delivery ledger keeps the plain failure string"
+  assert_not_contains "$out" "delivery failed" "an incomplete delivery ledger must not be relabeled"
+  pass "a truncated delivery ledger stays unclassified"
 }
 
 test_terminal_failed_validation_step_stays_plain_failed() {
@@ -2641,6 +2675,7 @@ test_terminal_failed_ci_genuine_red_stays_failed
 test_terminal_failed_ci_orphan_second_failed_step_stays_failed
 test_terminal_failed_push_reads_delivery_failure
 test_terminal_failed_push_without_validation_stays_plain_failed
+test_terminal_failed_push_with_truncated_steps_stays_plain_failed
 test_terminal_failed_validation_step_stays_plain_failed
 test_terminal_failed_ci_after_push_is_not_a_delivery_failure
 test_cross_branch_attribution_via_runs_list
