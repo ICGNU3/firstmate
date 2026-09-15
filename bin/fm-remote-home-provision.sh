@@ -335,7 +335,7 @@ while IFS= read -r NAME; do
   [ -n "$NAME" ] || continue
   DEST="$FM_HOME/projects/$NAME"
   command -v no-mistakes >/dev/null 2>&1 || die "no-mistakes is unavailable for project $NAME"
-  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fork-target.sh" init "$DEST" >/dev/null \
+  FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$FM_HOME/config" "$SCRIPT_DIR/fm-fork-target.sh" init "$DEST" >/dev/null \
     || die "no-mistakes initialization failed for project $NAME"
   pending_no_mistakes_remove "$NAME"
 done < "$NO_MISTAKES_PROJECTS"

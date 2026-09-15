@@ -1209,11 +1209,22 @@ test_home_seed_inherits_fork_url_before_refreshing_initialized_existing_project(
   git clone --quiet "$origin" "$subhome/projects/alpha"
   git -C "$subhome/projects/alpha" remote add no-mistakes "$TMP_ROOT/no-mistakes-existing-fork-url.git"
   printf '%s\n' '- alpha - alpha project (added 2026-06-22)' > "$home/data/projects.md"
-  fakebin=$(make_recording_no_mistakes "$TMP_ROOT/existing-initialized-fork-url-fake")
+  fakebin=$(fm_fakebin "$TMP_ROOT/existing-initialized-fork-url-fake")
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+set -eu
+printf '%s\t%s\t%s\n' "$PWD" "${1:-}" "${FM_CONFIG_OVERRIDE:-}" >> "$FM_FAKE_NO_MISTAKES_LOG"
+case "${1:-}" in
+  init) touch .no-mistakes-init ;;
+  doctor) touch .no-mistakes-doctor ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$fakebin/no-mistakes"
   : > "$log"
 
   PATH="$fakebin:$PATH" FM_FAKE_NO_MISTAKES_LOG="$log" \
-    FM_HOME="$home" FM_SECONDMATE_CHARTER='existing initialized fork target scope' \
+    FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_SECONDMATE_CHARTER='existing initialized fork target scope' \
     "$ROOT/bin/fm-home-seed.sh" design "$subhome" alpha >/dev/null \
     || fail "seed failed while inheriting fork-url into an initialized existing clone"
   expected=$(cat "$home/config/fork-url")
@@ -1224,6 +1235,10 @@ test_home_seed_inherits_fork_url_before_refreshing_initialized_existing_project(
     || fail "seed did not refresh the initialized existing fork target"
   grep -F "$subhome/projects/alpha$(printf '\t')doctor" "$log" >/dev/null \
     || fail "seed did not doctor the initialized existing fork target"
+  grep -F "$subhome/projects/alpha$(printf '\t')init$(printf '\t')$subhome/config" "$log" >/dev/null \
+    || fail "seed initialized the existing fork target using the parent config override"
+  grep -F "$subhome/projects/alpha$(printf '\t')doctor$(printf '\t')$subhome/config" "$log" >/dev/null \
+    || fail "seed doctored the existing fork target using the parent config override"
   pass "home seeding inherits fork-url before refreshing initialized existing clones"
 }
 

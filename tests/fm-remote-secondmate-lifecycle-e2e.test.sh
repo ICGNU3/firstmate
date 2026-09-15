@@ -545,6 +545,23 @@ grep -F "init$(printf '\t')ssh://github.example/owner/second.git" "$NM_LOG" >/de
   || fail "remote no-mistakes target refresh did not run doctor for both provisions"
 pass "remote provisioning refreshes existing no-mistakes project targets"
 
+REMOTE_AMBIENT_CONFIG="$TMP_ROOT/remote-ambient-config"
+mkdir -p "$REMOTE_AMBIENT_CONFIG"
+printf '%s\n' 'ssh://github.example/ambient/target.git' > "$REMOTE_AMBIENT_CONFIG/fork-url"
+REMOTE_CHILD_CONFIG_MANIFEST="$TMP_ROOT/remote-child-config.manifest"
+manifest_for_no_mistakes_project "$REMOTE_CHILD_CONFIG_MANIFEST" remote-child-config-home "$NM_ORIGIN" ssh://github.example/owner/child-config.git
+REMOTE_CHILD_CONFIG_HOME="$TMP_ROOT/remote-child-config-home"
+if FM_CONFIG_OVERRIDE="$REMOTE_AMBIENT_CONFIG" PATH="$FAKEBIN:$PATH" FM_HOME="$REMOTE_CHILD_CONFIG_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$REMOTE_CHILD_CONFIG_MANIFEST" \
+  > "$TMP_ROOT/remote-child-config.out" 2>&1; then
+  :
+else
+  fail "remote provisioning did not initialize with the child config"
+fi
+[ "$(git -C "$REMOTE_CHILD_CONFIG_HOME/projects/alpha-nm" remote get-url no-mistakes)" = 'ssh://github.example/owner/child-config.git' ] \
+  || fail "remote provisioning initialized the child gate from the ambient config override"
+pass "remote provisioning initializes from the child config"
+
 FAIL_RM_BIN="$TMP_ROOT/fail-rm-bin"
 mkdir -p "$FAIL_RM_BIN"
 REAL_RM=$(command -v rm)

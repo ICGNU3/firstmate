@@ -512,6 +512,7 @@ nm_reclassify_failed_run_as_held_green() {
 # check is a verdict on the code, not a transport failure, and the orphaned-ci
 # case above already owns the one shape where a ci failure is not a verdict.
 NM_DELIVERY_STEPS="push pr"
+NM_EXPECTED_STEPS="intent rebase review test document lint push pr ci"
 
 # Name of the delivery step a terminal failed run stopped at, set only by
 # nm_failed_run_is_delivery_failure below.
@@ -520,6 +521,14 @@ NM_DELIVERY_FAILED_STEP=""
 nm_step_is_delivery() {  # <step>
   local candidate
   for candidate in $NM_DELIVERY_STEPS; do
+    [ "$candidate" = "$1" ] && return 0
+  done
+  return 1
+}
+
+nm_step_is_expected() {  # <step>
+  local candidate
+  for candidate in $NM_EXPECTED_STEPS; do
     [ "$candidate" = "$1" ] && return 0
   done
   return 1
@@ -537,7 +546,7 @@ nm_step_is_delivery() {  # <step>
 # only read, and the run was recorded with the same "run failed" string as a run
 # whose validation failed.
 nm_failed_run_is_delivery_failure() {
-  local rows row rest step status seen_failure=0 declared_rows parsed_rows
+  local rows row rest step status seen_failure=0 declared_rows parsed_rows seen_steps="" expected
   NM_DELIVERY_FAILED_STEP=""
   nm_validation_steps_complete || return 1
   rows=$(nm_steps_rows)
@@ -552,6 +561,11 @@ nm_failed_run_is_delivery_failure() {
     step=$(trim "${row%%,*}")
     rest=${row#*,}
     status=$(strip_quotes "$(trim "${rest%%,*}")")
+    nm_step_is_expected "$step" || { NM_DELIVERY_FAILED_STEP=""; return 1; }
+    case " $seen_steps " in
+      *" $step "*) NM_DELIVERY_FAILED_STEP=""; return 1 ;;
+    esac
+    seen_steps="$seen_steps $step"
     if [ "$seen_failure" = 1 ]; then
       case "$status" in
         pending|skipped) continue ;;
@@ -570,6 +584,12 @@ nm_failed_run_is_delivery_failure() {
   done <<EOF
 $rows
 EOF
+  for expected in $NM_EXPECTED_STEPS; do
+    case " $seen_steps " in
+      *" $expected "*) ;;
+      *) NM_DELIVERY_FAILED_STEP=""; return 1 ;;
+    esac
+  done
   [ "$seen_failure" = 1 ]
 }
 
