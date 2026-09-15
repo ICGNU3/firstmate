@@ -224,6 +224,21 @@ SH
   pass "resolution uses no git remote or network lookup"
 }
 
+test_explicit_home_ignores_a_stale_config_override() {
+  local d stale out status; d=$(new_case explicit-home-config)
+  stale="$d/stale-config"
+  mkdir -p "$stale"
+  printf 'ssh://git@github.example/stale/wrong.git\n' > "$stale/fork-url"
+  printf 'ssh://git@github.example/configured/right.git\n' > "$d/home/config/fork-url"
+  status=0
+  out=$(FM_CONFIG_OVERRIDE='' FM_HOME="$d/home" PATH="$d/fakebin:$PATH" \
+    "$FORK_TARGET" resolve "$d/repo") || status=$?
+  expect_code 0 "$status" "an explicit home should resolve successfully"
+  assert_equals 'ssh://git@github.example/configured/right.git' "$out" \
+    "the explicit home declaration must win over a stale override"
+  pass "explicit home resolution does not inherit a stale config override"
+}
+
 test_init_passes_declared_url_verbatim() {
   local d status; d=$(new_case init-url)
   make_fakebin "$d" >/dev/null
@@ -326,6 +341,7 @@ test_unterminated_second_line_is_refused
 test_single_line_without_trailing_newline_is_accepted
 test_absent_declaration_is_empty_success
 test_resolution_does_not_read_git_or_network
+test_explicit_home_ignores_a_stale_config_override
 test_init_passes_declared_url_verbatim
 test_init_without_declaration_uses_origin
 test_missing_no_mistakes_is_advisory_without_a_declaration

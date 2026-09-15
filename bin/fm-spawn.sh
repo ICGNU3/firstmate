@@ -2574,7 +2574,8 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
       # no-mistakes' own init both still enforce it. Stopping here would also
       # couple every launch to daemon liveness.
       FORK_TARGET_INIT_STATUS=0
-      "$FM_ROOT/bin/fm-fork-target.sh" init "$PROJ_ABS" || FORK_TARGET_INIT_STATUS=$?
+      FM_CONFIG_OVERRIDE="$CONFIG" FM_HOME="$FM_HOME" \
+        "$FM_ROOT/bin/fm-fork-target.sh" init "$PROJ_ABS" || FORK_TARGET_INIT_STATUS=$?
       case "$FORK_TARGET_INIT_STATUS" in
         0) ;;
         4)

@@ -83,7 +83,7 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id>
 fm_no_mistakes_target_instruction() {  # <context> <quoted-home> <quoted-resolver>
   local context=$1 home_q=$2 resolver_q=$3
   # shellcheck disable=SC2016  # The generated contract must retain literal shell syntax.
-  printf 'Before %s, run `FM_HOME=%s %s init .` and capture its exit status. Status 0 means the target is ready and you may continue. Status 4 is advisory because no fork url is declared and the gate keeps its existing target: report the warning and continue. Any other non-zero status means stop and report the resolver or initialization error; do not start the gate.\n' \
+  printf 'Before %s, run `FM_CONFIG_OVERRIDE= FM_HOME=%s %s init .` and capture its exit status. Status 0 means the target is ready and you may continue. Status 4 is advisory because no fork url is declared and the gate keeps its existing target: report the warning and continue. Any other non-zero status means stop and report the resolver or initialization error; do not start the gate.\n' \
     "$context" "$home_q" "$resolver_q"
 }
 
@@ -279,7 +279,7 @@ Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
-Before pushing, run \`FM_HOME=$home_q $resolver_q resolve .\` and check its exit status. If it exits non-zero, stop and report the resolver error instead of pushing; if it succeeds with a url, this home cannot push to \`origin\`, so push your branch to that fork and open the PR against \`origin\` from it; if it succeeds with no output, push to \`origin\` as usual.
+Before pushing, run \`FM_CONFIG_OVERRIDE= FM_HOME=$home_q $resolver_q resolve .\` and check its exit status. If it exits non-zero, stop and report the resolver error instead of pushing; if it succeeds with a url, this home cannot push to \`origin\`, so push your branch to that fork and open the PR against \`origin\` from it; if it succeeds with no output, push to \`origin\` as usual.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
       ;;
