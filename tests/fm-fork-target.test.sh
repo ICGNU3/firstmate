@@ -4,6 +4,7 @@
 # no-mistakes command to assert target output and initialization side effects.
 set -u
 
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 FORK_TARGET="$ROOT/bin/fm-fork-target.sh"
 TMP_ROOT=$(fm_test_tmproot fm-fork-target)

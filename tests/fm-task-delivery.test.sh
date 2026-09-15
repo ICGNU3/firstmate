@@ -319,7 +319,7 @@ test_promote_refuses_a_symlinked_task_record() {
 # prints against a capturing fm-send.sh, and asserts on the message the worker would
 # actually receive - for every supported mode.
 test_promotion_delivers_the_real_definition_of_done() {
-  local home meta out sendroot payload mode id brief_dod delivered_dod foreign_root resolver_bin resolver_log dod
+  local home meta out sendroot payload mode id brief_dod delivered_dod foreign_root resolver_bin resolver_log
   home="$TMP_ROOT/promote-dod/home"
   sendroot="$TMP_ROOT/promote-dod/sendroot"
   foreign_root="$TMP_ROOT/promote-dod/firstmate helper's root"

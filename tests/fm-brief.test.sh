@@ -195,10 +195,9 @@ EOF
 # one of these DOD blocks, since a broken heredoc corrupts or empties the
 # generated brief content, not just the script's own syntax.
 test_ship_modes_generate_clean_briefs() {
-  local home id mode brief status home_q
+  local home id mode brief status
   home="$TMP_ROOT/ship-home"
   write_registry "$home"
-  home_q=$(printf '%q' "$home")
 
   for id_mode in "brief-nomistakes-a1:no-mistakes" "brief-directpr-a2:direct-PR" "brief-localonly-a3:local-only"; do
     id=${id_mode%%:*}
@@ -327,7 +326,7 @@ test_faster_paths_use_configured_authority_without_stacked_review() {
 # Pin the specific line the bug lived on: the no-mistakes DOD's no-mistakes
 # reference must render as plain prose with no dangling apostrophe artifact.
 test_no_mistakes_dod_wording() {
-  local home id brief spelling dod
+  local home id brief spelling
   home="$TMP_ROOT/wording-home"
   mkdir -p "$home/data"
   id="brief-wording-b1"
