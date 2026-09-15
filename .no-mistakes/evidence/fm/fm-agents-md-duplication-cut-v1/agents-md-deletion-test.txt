@@ -1,0 +1,58 @@
+Target commit: 26fc0f4d48994d6a14dedf7fa48d163ed432c721
+$ bin/fm-doc-audience-check.sh
+fm-doc-audience-check: ok surfaces=100 local_links=399
+$ tests/fm-documentation-audiences.test.sh
+ok - documentation inventory classifies every maintained prose surface exactly once
+ok - classification, setup routing, and maintained-prose scope fail safely
+ok - required documentation owner pointers cannot silently disappear
+ok - local links resolve while dates, versions, commands, and incident prose remain semantically reviewed
+$ bin/fm-session-start.sh --help | sed -n "1,3p"
+fm-session-start.sh - one command for the whole session start.
+
+Collapses AGENTS.md sections 3 (bootstrap) and 5 (recovery) into ONE script
+$ git diff --numstat BASE TARGET -- AGENTS.md
+5	119	AGENTS.md
+$ measured AGENTS.md bytes and ceil(bytes/3)
+616049a0c7acc1efb9559fc6dee448d33402f9dc bytes=80778 ceil_bytes_div3=26926
+26fc0f4d48994d6a14dedf7fa48d163ed432c721 bytes=58681 ceil_bytes_div3=19561
+$ persisted contract excerpts
+    51	## 2. Layout and state
+    52	
+    53	[`docs/configuration.md`](docs/configuration.md) "Operational home layout and state" is the single owner of the top-level operational-home layout and configuration schemas; each producing script's header and help own exact child fields and mutation mechanics.
+    54	Read that owner when you need a file you have not met before, and do not keep a second copy of its inventory here, because a partial copy reads as proof that an unlisted file does not exist.
+    55	`FM_HOME` selects an instance's private `data/`, `state/`, `config/`, and `projects/`, while scripts continue to come from their tracked code root.
+    56	Each secondmate has a persistent isolated `FM_HOME`, including its own state, backlog, projects, and session lock.
+    57	`bin/fm-send.sh` fails closed unless `FM_HOME` is explicit, so a steer cannot silently resolve against another home.
+    58	
+    59	Tracked files hold shared instructions and tooling; `data/` holds durable private fleet records; `state/` holds runtime records and append-only status events; `config/` holds local operating choices; and `projects/` contains clones that are read-only to firstmate except under hard rule 1's concrete captain-approved project operation exception.
+    60	
+    61	Never hand-edit or delete the watcher, sub-supervisor, turn-end-guard, lease, presentation-cursor, and recovery coordination records under `state/`; repair them only through their owner scripts, because editing one by hand breaks supervision quietly instead of refusing, except that `state/.<id>.open-decisions-cursor` may be safely deleted to force one full re-fold and `state/.watch-triage.log` may be safely deleted because it is a size-capped debug log never relied on.
+    62	
+    63	A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
+    64	Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
+    65	
+    66	## 3. Session start (run once at every session start)
+    67	
+    68	Run `bin/fm-session-start.sh` exactly once at session start.
+    69	Its header is the single owner of composed commands, ordering, and digest contents.
+    70	`bin/fm-supervision-instructions.sh` renders the emitted supervision block from `docs/supervision-protocols/`.
+    71	Do not reimplement it by separately running its lock, bootstrap, initial wake-drain, or deferred-network components.
+    72	Run-tier harness surfaces run this command for you at session open while the rest only nudge it, so confirm the digest is present in this session and run it yourself when it is not; `docs/sessionstart-nudge.md` owns adapter tiers, source routing, and compatibility.
+$ owner contract excerpts
+     9	## Operational home layout and state
+    10	
+    11	This section is the single owner of the top-level operational-home layout; producer script headers and their help own exact child-file fields and mutation contracts.
+    12	The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
+    13	`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, scout reports, and explicitly installed content-addressed extension packages under `data/extensions/packages/`.
+    14	`state/` holds runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, inactive terminal-outcome receipts under `state/terminal-outcomes/`, enabled extension working namespaces under `state/extensions/`, away-mode state, generated Relay artifacts, parent-side remote ledger copies under `state/secondmate-summary-cache/`, one-shot Bearings reconcile requests under `state/reconcile-notify/`, private secondmate config-reread generations with their retry and quarantine state, per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`), and parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
+    15	`config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`, and `projects/` holds the local project clones that Firstmate reads but changes only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
+    16	Untracked files and directories whose names begin with `scratchpad` are also gitignored, so temporary scratch does not make porcelain-based secondmate sync guards treat a home as dirty.
+    17	
+    18	`bin/fm-spawn.sh` owns the base task-metadata fields it emits, while the runtime-backend section below owns backend-specific fields and selector interpretation.
+    19	The producing PR and Relay helpers own the fields they append, `bin/fm-classify-lib.sh` owns status-event vocabulary, and `bin/fm-crew-state.sh` owns current-state reconciliation.
+    20	Wake, watcher, away-mode, and Relay-specific state mechanics remain with their named scripts and reference sections rather than being duplicated into one exhaustive state tree here.
+    21	
+    22	`bin/fm-session-start.sh`'s header is the single owner of session-start ordering, composed commands, digest contents, and the digest's startup mechanism.
+    23	`bin/fm-startup-network.sh`'s header owns the deferred startup stage that keeps every external-network call and the potentially slow inactive-outcome scan off that digest's blocking path, including its state files and the safety argument for running them later.
+    24	`docs/sessionstart-nudge.md` owns the native session-open adapter tiers that run or nudge the digest command, and the source routing between them.
+    25	`AGENTS.md` retains the run-once and read-once operator rules, lock-refusal safety, installation consent, and direct-report recovery boundaries because those facts apply at every session start.
