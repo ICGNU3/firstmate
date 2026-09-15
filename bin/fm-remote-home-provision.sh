@@ -114,8 +114,11 @@ FORK_URL_PRESENT=
 FORK_URL_B64=$(manifest_value "$TMP/manifest" fork_url_b64 || true)
 if [ "$FORK_URL_PRESENT_FIELD_COUNT" -eq 1 ]; then
   FORK_URL_PRESENT=$(manifest_value "$TMP/manifest" fork_url_present || true)
-  [ "$FORK_URL_PRESENT" = 1 ] || die "manifest fork-url presence is invalid"
-  [ "$FORK_URL_FIELD_COUNT" -eq 1 ] || die "manifest fork-url payload is missing"
+  case "$FORK_URL_PRESENT" in
+    0) [ "$FORK_URL_FIELD_COUNT" -eq 0 ] || die "manifest fork-url payload must be absent" ;;
+    1) [ "$FORK_URL_FIELD_COUNT" -eq 1 ] || die "manifest fork-url payload is missing" ;;
+    *) die "manifest fork-url presence is invalid" ;;
+  esac
 elif [ "$FORK_URL_FIELD_COUNT" -ne 0 ]; then
   die "manifest fork-url presence marker is missing"
 fi
@@ -210,7 +213,7 @@ else
   CREATED_BACKLOG=1
 fi
 
-if [ "$FORK_URL_PRESENT_FIELD_COUNT" -eq 1 ]; then
+if [ "$FORK_URL_PRESENT_FIELD_COUNT" -eq 1 ] && [ "$FORK_URL_PRESENT" = 1 ]; then
   base64_decode_to "$FORK_URL_B64" "$TMP/fork-url" \
     || die "manifest fork url is not valid base64"
   [ -z "$(LC_ALL=C tr -cd '\000' < "$TMP/fork-url")" ] \
@@ -219,6 +222,8 @@ if [ "$FORK_URL_PRESENT_FIELD_COUNT" -eq 1 ]; then
     || die "cannot stage remote fork url"
   chmod 600 "$FM_HOME/config/fork-url.tmp.$$"
   mv -f -- "$FM_HOME/config/fork-url.tmp.$$" "$FM_HOME/config/fork-url"
+elif [ "$FORK_URL_PRESENT_FIELD_COUNT" -eq 1 ]; then
+  rm -f -- "$FM_HOME/config/fork-url"
 fi
 
 PROJECT_REG="$TMP/projects.md"

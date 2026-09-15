@@ -249,7 +249,7 @@ esac
 SH
 chmod +x "$FAKEBIN/fake-ssh"
 
-manifest_for_url() { # <file> <id> <absent|empty|value>
+manifest_for_url() { # <file> <id> <legacy|absent|empty|value>
   local file=$1 id=$2 kind=$3 url_b64=
   case "$kind" in
     value) url_b64=$(printf 'ssh://git@github.example/contributor/widget.git\n' | base64 | tr -d '\n') ;;
@@ -259,6 +259,9 @@ manifest_for_url() { # <file> <id> <absent|empty|value>
     printf 'id_b64=%s\n' "$(printf '%s' "$id" | base64 | tr -d '\n')"
     printf 'charter_b64=%s\n' "$(printf 'URL manifest charter.\n' | base64 | tr -d '\n')"
     case "$kind" in
+      absent)
+        printf 'fork_url_present=0\n'
+        ;;
       empty)
         printf 'fork_url_present=1\n'
         printf 'fork_url_b64=\n'
@@ -392,11 +395,10 @@ FM_FAKE_PROVISION_MANIFEST="$manifest_capture" \
   seed_env "$ROOT/bin/fm-remote-home-seed.sh" manifest-absent remote-mac "$REMOTE_ROOT" \
   "$TMP_ROOT/manifest-absent-home" --no-projects >/dev/null 2>&1 \
   || fail "seeding without fork-url should capture a manifest"
-if grep -q '^fork_url_present=' "$manifest_capture"; then
-  fail "an absent fork-url setting was encoded as present"
-fi
+grep -qx 'fork_url_present=0' "$manifest_capture" \
+  || fail "an absent fork-url setting did not carry its explicit absence marker"
 if grep -q '^fork_url_b64=' "$manifest_capture"; then
-  fail "an absent fork-url setting was encoded with an empty payload"
+  fail "an absent fork-url setting carried a payload"
 fi
 
 : > "$TMP_ROOT/seed-parent/config/fork-url"
@@ -442,13 +444,26 @@ FM_HOME="$TMP_ROOT/url-empty-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
 [ ! -s "$TMP_ROOT/url-empty-home/config/fork-url" ] \
   || fail "an empty fork-url manifest materialized nonempty content"
 
+manifest_for_url "$TMP_ROOT/url-legacy.manifest" url-value legacy
+FM_HOME="$TMP_ROOT/url-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/url-legacy.manifest" \
+  > "$TMP_ROOT/url-legacy.out" 2>&1 \
+  || fail "remote provisioning rejected a legacy manifest without a fork-url field"
+[ "$(cat "$TMP_ROOT/url-value-home/config/fork-url")" = 'ssh://git@github.example/contributor/widget.git' ] \
+  || fail "a legacy manifest without a fork-url field erased an existing setting"
+
 manifest_for_url "$TMP_ROOT/url-absent.manifest" url-value absent
 FM_HOME="$TMP_ROOT/url-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
   "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/url-absent.manifest" \
   > "$TMP_ROOT/url-absent.out" 2>&1 \
-  || fail "remote provisioning rejected an absent fork-url manifest"
-[ "$(cat "$TMP_ROOT/url-value-home/config/fork-url")" = 'ssh://git@github.example/contributor/widget.git' ] \
-  || fail "an absent fork-url manifest erased an existing setting"
+  || fail "remote provisioning rejected an explicit absent fork-url manifest"
+[ ! -e "$TMP_ROOT/url-value-home/config/fork-url" ] \
+  || fail "an explicit absent fork-url manifest preserved an existing setting"
+
+FM_HOME="$TMP_ROOT/url-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/url-value.manifest" \
+  > "$TMP_ROOT/url-value-restore.out" 2>&1 \
+  || fail "remote provisioning could not restore the valued fork-url fixture"
 
 printf '%s\n' 'schema=fm-remote-home-provision.v1' \
   'id_b64=dXJsLXZhbHVl' \
