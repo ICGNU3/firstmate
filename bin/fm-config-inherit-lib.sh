@@ -473,6 +473,13 @@ propagate_inheritable_config() {
       rc=1
       continue
     fi
+    if [ "$item" = fork-url ] && [ -L "$src" ]; then
+      reason="primary source is a symlink"
+      warn_inheritable_config_error "$item" "$src" "$reason"
+      record_inheritable_config_result "$item" error "$reason"
+      rc=1
+      continue
+    fi
     # This one scalar config is consumed as a local safety boundary, so reject
     # every unsafe or malformed source/destination artifact before the generic
     # byte-copy behavior below can treat it as ordinary inherited material.

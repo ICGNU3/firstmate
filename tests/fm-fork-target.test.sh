@@ -114,10 +114,29 @@ test_unreadable_declaration_is_refused_without_init() {
   assert_equals "" "$out" "an unreadable declaration must produce no stdout"
   err=$(cat "$d/err")
   assert_contains "$err" "config/fork-url" "the unreadable setting must be named"
-  assert_contains "$err" "observe" "the read failure must be identified"
+  assert_contains "$err" "not a regular file" "the read failure reason must be concrete"
   assert_not_contains "$(cat "$d/nm.log")" "init" \
     "an unreadable declaration must not invoke no-mistakes init"
   pass "an unreadable config/fork-url fails closed without initialization"
+}
+
+test_control_bytes_are_refused_without_init() {
+  local d status out err; d=$(new_case control-byte-url)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" https://github.com/acme/widget.git
+  printf 'ssh://github.example/contributor/widget.git' > "$d/home/config/fork-url"
+  printf '\0evil\n' >> "$d/home/config/fork-url"
+  status=0
+  out=$(FM_TEST_NM_LOG="$d/nm.log" PATH="$d/fakebin:$PATH" FM_HOME="$d/home" \
+    "$FORK_TARGET" init "$d/repo" 2>"$d/err") || status=$?
+  expect_code 1 "$status" "a control-byte declaration must stop init"
+  assert_equals "" "$out" "a control-byte declaration must produce no stdout"
+  err=$(cat "$d/err")
+  assert_contains "$err" "config/fork-url" "the control-byte setting must be named"
+  assert_contains "$err" "NUL or control byte" "the control-byte reason must be stated"
+  assert_not_contains "$(cat "$d/nm.log")" "init" \
+    "a control-byte declaration must not invoke no-mistakes init"
+  pass "config/fork-url control bytes fail before shell storage or init"
 }
 
 test_malformed_declaration_is_refused() {
@@ -287,6 +306,7 @@ test_declared_url_is_used_verbatim
 test_surrounding_whitespace_is_refused
 test_unusable_declarations_are_refused_without_init
 test_unreadable_declaration_is_refused_without_init
+test_control_bytes_are_refused_without_init
 test_malformed_declaration_is_refused
 test_unterminated_second_line_is_refused
 test_single_line_without_trailing_newline_is_accepted

@@ -63,34 +63,70 @@ usage() {
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
 config_token() {  # <name>
-  local path="$CONFIG/$1" value extra read_status
-  if [ ! -e "$CONFIG" ] && [ ! -L "$CONFIG" ]; then
-    return 1
-  fi
-  [ -d "$CONFIG" ] && [ ! -L "$CONFIG" ] && [ -r "$CONFIG" ] && [ -x "$CONFIG" ] || return 2
-  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
-    return 1
-  fi
-  [ -f "$path" ] && [ ! -L "$path" ] && [ -r "$path" ] || return 2
-  exec 3< "$path" || return 2
-  value=
-  IFS= read -r value <&3
-  read_status=$?
-  [ "$read_status" -le 1 ] || { exec 3<&-; return 2; }
-  extra=
-  IFS= read -r extra <&3
-  read_status=$?
-  exec 3<&-
-  [ "$read_status" -le 1 ] || return 2
-  # Exactly one line is the whole contract, and a second `read` returns 1 at EOF
-  # even when it captured bytes, so a trailing line must be detected by what it
-  # read and not only by that status: `<url>\nsecond` with no final newline is
-  # still two lines and is unusable.
-  if [ "$read_status" -eq 0 ] || [ -n "$extra" ]; then
-    printf '%s' "$value"
-    return 3
-  fi
-  printf '%s' "$value"
+  local path="$CONFIG/$1" state raw_status
+  config_path_state "$1" "$CONFIG"; state=$?
+  case "$state" in
+    0) ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+  [ -d "$CONFIG" ] || { config_observe_error "$1" "$CONFIG" "path is not a directory"; return 2; }
+  [ ! -L "$CONFIG" ] || { config_observe_error "$1" "$CONFIG" "configuration directory is a symlink"; return 2; }
+  [ -r "$CONFIG" ] || { config_observe_error "$1" "$CONFIG" "configuration directory is not readable"; return 2; }
+  [ -x "$CONFIG" ] || { config_observe_error "$1" "$CONFIG" "configuration directory is not searchable"; return 2; }
+  config_path_state "$1" "$path"; state=$?
+  case "$state" in
+    0) ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+  [ -f "$path" ] || { config_observe_error "$1" "$path" "path is not a regular file"; return 2; }
+  [ ! -L "$path" ] || { config_observe_error "$1" "$path" "declaration is a symlink"; return 2; }
+  [ -r "$path" ] || { config_observe_error "$1" "$path" "declaration is not readable"; return 2; }
+  perl -e '
+    my ($label, $path) = @ARGV;
+    sub observe_error {
+      my ($reason) = @_;
+      printf STDERR "error: could not observe %s at %s: %s\n", $label, $path, $reason;
+      exit 2;
+    }
+    open my $fh, "<:raw", $path or observe_error("read failed: $!");
+    local $/;
+    my $bytes = <$fh>;
+    defined $bytes or observe_error("read failed");
+    close $fh or observe_error("read failed: $!");
+    exit 4 if $bytes =~ /[\x00-\x09\x0B-\x1F\x7F]/;
+    $bytes =~ s/\n\z//;
+    if ($bytes =~ /\n/) {
+      my ($first) = split /\n/, $bytes, 2;
+      print $first;
+      exit 3;
+    }
+    print $bytes;
+  ' -- "$1" "$path"
+  raw_status=$?
+  case "$raw_status" in
+    0|3|4) return "$raw_status" ;;
+    *) return 2 ;;
+  esac
+}
+
+config_path_state() {
+  perl -MErrno=ENOENT -e '
+    my ($label, $path) = @ARGV;
+    if (lstat $path) {
+      exit 0;
+    }
+    if ($! == ENOENT) {
+      exit 1;
+    }
+    printf STDERR "error: could not observe %s at %s: %s\n", $label, $path, $!;
+    exit 2;
+  ' -- "$1" "$2"
+}
+
+config_observe_error() {
+  printf 'error: could not observe %s at %s: %s\n' "$1" "$2" "$3" >&2
 }
 
 fork_url_validate() {  # <url>
@@ -139,7 +175,7 @@ fork_url_validate() {  # <url>
 }
 
 resolve_fork_url() {  # <dir>
-  local dir=$1 declared config_status
+  local dir=$1 declared= config_status
   if declared=$(config_token fork-url); then
     config_status=0
     fork_url_validate "$declared" || config_status=$?
@@ -159,11 +195,18 @@ resolve_fork_url() {  # <dir>
   else
     config_status=$?
     [ "$config_status" -eq 1 ] && return 1
-    if [ "$config_status" -eq 2 ]; then
-      printf 'error: could not observe config/fork-url at %s\n' "$CONFIG/fork-url" >&2
-    else
-      printf 'error: config/fork-url value %s is unusable: it must contain exactly one line\n' "$declared" >&2
-    fi
+    case "$config_status" in
+      2) ;;
+      3)
+        printf 'error: config/fork-url value %s is unusable: it must contain exactly one line\n' "$declared" >&2
+        ;;
+      4)
+        printf 'error: config/fork-url is unusable: it contains a NUL or control byte\n' >&2
+        ;;
+      *)
+        printf 'error: config/fork-url is unusable: its contents could not be classified\n' >&2
+        ;;
+    esac
     return 3
   fi
 }
