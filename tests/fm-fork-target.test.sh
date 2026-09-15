@@ -133,6 +133,35 @@ test_malformed_declaration_is_refused() {
   pass "multi-line config/fork-url declarations fail closed"
 }
 
+# The unterminated variant is its own case because `read` reports 1 at EOF even
+# when it captured bytes, so a second line WITHOUT a final newline is the shape
+# a status-only check silently accepts.
+test_unterminated_second_line_is_refused() {
+  local d status out err; d=$(new_case unterminated-second-line)
+  make_fakebin "$d" >/dev/null
+  printf 'ssh://github.example/contributor/widget.git\nsecond-line' > "$d/home/config/fork-url"
+  status=0; out=$(resolve "$d" 2>"$d/err") || status=$?
+  expect_code 1 "$status" "an unterminated second line must be rejected"
+  assert_equals "" "$out" "an unterminated second line must produce no output"
+  err=$(cat "$d/err")
+  assert_contains "$err" "config/fork-url" "the malformed setting must be named"
+  assert_contains "$err" "exactly one line" "the malformed shape must be stated"
+  pass "a second line without a final newline fails closed"
+}
+
+# The accepting side of the same boundary: a lone line with no trailing newline
+# is one line and must still resolve.
+test_single_line_without_trailing_newline_is_accepted() {
+  local d out status; d=$(new_case unterminated-single-line)
+  make_fakebin "$d" >/dev/null
+  printf 'ssh://github.example/contributor/widget.git' > "$d/home/config/fork-url"
+  status=0; out=$(resolve "$d") || status=$?
+  expect_code 0 "$status" "a single unterminated line must succeed"
+  assert_equals 'ssh://github.example/contributor/widget.git' "$out" \
+    "a single unterminated line must resolve verbatim"
+  pass "a single line without a trailing newline is accepted"
+}
+
 test_absent_declaration_is_empty_success() {
   local d out status; d=$(new_case absent-url)
   make_fakebin "$d" >/dev/null
@@ -218,6 +247,8 @@ test_surrounding_whitespace_is_refused
 test_unusable_declarations_are_refused_without_init
 test_unreadable_declaration_is_refused_without_init
 test_malformed_declaration_is_refused
+test_unterminated_second_line_is_refused
+test_single_line_without_trailing_newline_is_accepted
 test_absent_declaration_is_empty_success
 test_resolution_does_not_read_git_or_network
 test_init_passes_declared_url_verbatim

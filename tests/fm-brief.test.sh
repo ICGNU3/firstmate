@@ -507,6 +507,32 @@ test_herdr_lab_contract_quotes_foreign_firstmate_path() {
   pass "fm-brief.sh: --herdr-lab uses its quoted Firstmate-owned helper path"
 }
 
+# Same boundary as the Herdr helper above, for the push-target resolver: the
+# generated command must survive a Firstmate root containing a space, or the
+# worker's very first delivery step splits into two words and fails.
+test_fork_target_command_quotes_foreign_firstmate_path() {
+  local home id brief foreign_root resolver_q mode verb
+  home="$TMP_ROOT/fork-target-foreign-home"
+  foreign_root="$TMP_ROOT/firstmate helper's root"
+  mkdir -p "$home/data"
+  write_registry "$home"
+  resolver_q=$(printf '%q' "$foreign_root/bin/fm-fork-target.sh")
+  for mode_verb in "no-mistakes:init" "direct-PR:resolve"; do
+    mode=${mode_verb%%:*}
+    verb=${mode_verb##*:}
+    id="brief-fork-target-foreign-${verb}"
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$foreign_root" "$ROOT/bin/fm-brief.sh" \
+      "$id" foreign --mode "$mode" >/dev/null 2>&1
+    brief="$home/data/$id/brief.md"
+    assert_present "$brief" "$id: brief was not scaffolded"
+    assert_grep "$resolver_q $verb ." "$brief" \
+      "$id: generated resolver command must quote an absolute Firstmate root"
+    assert_no_grep "$foreign_root/bin/fm-fork-target.sh $verb ." "$brief" \
+      "$id: generated resolver command must not interpolate an unquoted root"
+  done
+  pass "fm-brief.sh: the push-target command quotes its Firstmate root"
+}
+
 test_herdr_lab_omission_is_loud_for_ship_and_scout() {
   local home id brief
   home="$TMP_ROOT/herdr-gate-home"
@@ -944,6 +970,7 @@ test_ask_user_escalation_format
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
+test_fork_target_command_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_documented_global_replace_leaves_the_herdr_gate_intact
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates

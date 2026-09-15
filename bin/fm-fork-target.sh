@@ -27,8 +27,11 @@
 # nothing with exit 0. An unusable declaration or internal error prints nothing
 # on stdout, names the problem on stderr, and exits non-zero; non-zero never
 # means no fork.
-# config/fork-url accepts https/http/ssh/git+ssh/file URLs with a host and path,
-# or a standard user@host:path push URL; accepted values are never rewritten.
+# config/fork-url must contain EXACTLY ONE line, whether or not that line carries
+# a terminating newline; a second line makes the declaration unusable rather than
+# silently ignored. Its value accepts https/http/ssh/git+ssh/file URLs with a
+# host and path, or a standard user@host:path push URL; accepted values are never
+# rewritten.
 #
 # `no-mistakes init` refreshes an existing registration, so `init` is also the
 # repair path for a home whose gate was already initialized against an
@@ -61,15 +64,19 @@ config_token() {  # <name>
   IFS= read -r value <&3
   read_status=$?
   [ "$read_status" -le 1 ] || { exec 3<&-; return 2; }
+  extra=
   IFS= read -r extra <&3
   read_status=$?
-  if [ "$read_status" -eq 0 ]; then
-    exec 3<&-
+  exec 3<&-
+  [ "$read_status" -le 1 ] || return 2
+  # Exactly one line is the whole contract, and a second `read` returns 1 at EOF
+  # even when it captured bytes, so a trailing line must be detected by what it
+  # read and not only by that status: `<url>\nsecond` with no final newline is
+  # still two lines and is unusable.
+  if [ "$read_status" -eq 0 ] || [ -n "$extra" ]; then
     printf '%s' "$value"
     return 3
   fi
-  exec 3<&-
-  [ "$read_status" -eq 1 ] || return 2
   printf '%s' "$value"
 }
 

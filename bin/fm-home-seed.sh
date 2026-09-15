@@ -732,16 +732,16 @@ initialize_no_mistakes_project() {
     echo "error: failed to inherit fork target configuration before initializing $project in $home" >&2
     return 1
   fi
-  for target_config in fork-url; do
-    if [ -f "$CONFIG/$target_config" ] && ! cmp -s "$CONFIG/$target_config" "$home/config/$target_config"; then
-      echo "error: $target_config was not inherited before initializing $project in $home" >&2
-      return 1
-    fi
-    if [ ! -e "$CONFIG/$target_config" ] && [ -e "$home/config/$target_config" ]; then
-      echo "error: stale $target_config remained before initializing $project in $home" >&2
-      return 1
-    fi
-  done
+  # One declaration form means one file to verify; a loop over a single name
+  # reads as a list that lost its other entries.
+  if [ -f "$CONFIG/fork-url" ] && ! cmp -s "$CONFIG/fork-url" "$home/config/fork-url"; then
+    echo "error: fork-url was not inherited before initializing $project in $home" >&2
+    return 1
+  fi
+  if [ ! -e "$CONFIG/fork-url" ] && [ -e "$home/config/fork-url" ]; then
+    echo "error: stale fork-url remained before initializing $project in $home" >&2
+    return 1
+  fi
   FM_HOME="$home" "$SCRIPT_DIR/fm-fork-target.sh" init "$dst" >/dev/null || {
     echo "error: failed to initialize no-mistakes for $project at $dst" >&2
     return 1
