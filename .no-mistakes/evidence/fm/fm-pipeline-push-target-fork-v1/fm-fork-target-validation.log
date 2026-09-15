@@ -1,0 +1,21 @@
+FM_TEST_BEGIN 2026-09-15T17:52:16Z tests/fm-fork-target.test.sh family=unclassified expected_gate_skip=none
+ok - config/fork-url returns accepted URLs byte-for-byte
+ok - config/fork-url whitespace is rejected without normalization
+ok - unusable config/fork-url declarations fail closed before init
+ok - an unreadable config/fork-url fails closed without initialization
+ok - config/fork-url control bytes fail before shell storage or init
+ok - multi-line config/fork-url declarations fail closed
+ok - a second line without a final newline fails closed
+ok - a single line without a trailing newline is accepted
+ok - an absent config/fork-url selects unchanged origin behavior
+ok - resolution uses no git remote or network lookup
+ok - init initializes the gate against config/fork-url
+ok - init preserves the maintainer origin path when unconfigured
+ok - a missing no-mistakes without a declaration is advisory, not fatal
+ok - a missing no-mistakes with a declared url refuses
+ok - failed resolution preserves an existing gate registration
+ok - usage errors exit 2
+FM_TEST_END 2026-09-15T17:52:19Z tests/fm-fork-target.test.sh exit=0 duration_ms=3140 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=3626
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=3140 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-fork-target.test.sh duration_ms=3140
