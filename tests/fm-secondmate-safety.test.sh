@@ -1207,6 +1207,27 @@ test_home_seed_inherits_fork_url_before_skipping_initialized_existing_project() 
   pass "home seeding inherits fork-url before skipping initialized existing clones"
 }
 
+test_home_seed_inherits_fork_url_for_direct_pr_project() {
+  local home subhome expected actual
+  home="$TMP_ROOT/direct-pr-fork-url-home"
+  subhome="$TMP_ROOT/direct-pr-fork-url-subhome"
+  mkdir -p "$home/projects" "$home/data" "$home/state" "$home/config"
+  fm_git_init_commit "$home/projects/alpha"
+  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/direct-pr-fork-url-alpha.git"
+  printf '%s\n' 'ssh://github.example/contributor/widget.git' > "$home/config/fork-url"
+  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
+  scaffold_secondmate_charter "$home" design 'direct PR fork target' alpha \
+    || fail "charter scaffold failed for direct-PR fork-url seed test"
+
+  FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" design "$subhome" alpha >/dev/null \
+    || fail "direct-PR seed failed while inheriting fork-url"
+  expected=$(cat "$home/config/fork-url")
+  actual=$(cat "$subhome/config/fork-url")
+  [ "$actual" = "$expected" ] \
+    || fail "direct-PR project did not receive the parent's fork-url"
+  pass "home seeding inherits fork-url for direct-PR projects"
+}
+
 test_home_seed_refuses_uninitialized_existing_no_mistakes_project() {
   local home subhome err fakebin log origin
   home="$TMP_ROOT/existing-uninitialized-home"
@@ -3023,6 +3044,7 @@ test_home_seed_refuses_existing_remote_backed_project_with_wrong_origin
 test_home_seed_resolves_relative_source_origins
 test_home_seed_skips_initialized_existing_no_mistakes_projects
 test_home_seed_inherits_fork_url_before_skipping_initialized_existing_project
+test_home_seed_inherits_fork_url_for_direct_pr_project
 test_home_seed_refuses_uninitialized_existing_no_mistakes_project
 test_home_seed_refuses_project_destinations_outside_subhome
 test_home_seed_refuses_operational_dirs_outside_subhome

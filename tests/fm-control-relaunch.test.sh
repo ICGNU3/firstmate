@@ -531,6 +531,26 @@ test_relaunch_preserves_durable_task_metadata() {
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
 }
 
+test_spawn_relaunch_preserves_cmux_surface_metadata_once() {
+  local dir out count
+  dir=$(new_case cmux-surface-meta rl45)
+  add_ship_task "$dir" rl45 claude
+  {
+    printf '%s\n' 'backend=tmux'
+    printf '%s\n' 'cmux_workspace_id=workspace-owned'
+    printf '%s\n' 'cmux_surface_id=surface-owned'
+  } >> "$dir/home/state/rl45.meta"
+  out=$(CMUX_SURFACE_ID=ambient-surface run_spawn "$dir" rl45 --relaunch)
+  count=$(grep -c '^cmux_surface_id=' "$dir/home/state/rl45.meta" || true)
+  [ "$count" -eq 1 ] || fail "relaunch must retain exactly one cmux surface id"
+  [ "$(meta_field "$dir" rl45 cmux_surface_id)" = surface-owned ] \
+    || fail "relaunch replaced the task-owned cmux surface id"
+  [ "$(meta_field "$dir" rl45 cmux_surface_id)" != ambient-surface ] \
+    || fail "relaunch used an ambient cmux surface id"
+  [ -n "$out" ] || fail "relaunch should report its replacement launch"
+  pass "fm-spawn --relaunch: task-owned cmux surface metadata survives exactly once"
+}
+
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
   local dir control_pid link_pid rc i=0 traceparent prepare launch_release waiting ready release
   dir=$(new_case metadata-race rl28)
@@ -1789,6 +1809,7 @@ test_relaunch_refreshes_changed_push_target
 test_relaunch_advisory_no_declaration_still_launches
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
+test_spawn_relaunch_preserves_cmux_surface_metadata_once
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
