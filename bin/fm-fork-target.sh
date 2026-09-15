@@ -244,7 +244,9 @@ cmd_resolve() {  # <dir>
 }
 
 has_existing_fork_registration() {  # <dir>
-  registered_fork_url "$1" >/dev/null
+  local registered
+  registered=$(registered_fork_url "$1") || return 1
+  [ -n "$registered" ]
 }
 
 registered_fork_url() {  # <dir>
@@ -258,17 +260,23 @@ registered_fork_url() {  # <dir>
       found=1
       exit
     }
-    END { exit !found }
+    END { exit 0 }
   '
 }
 
 fork_target_registration_matches() {  # <dir>
   local dir=$1 resolved_status=0 resolved registered
   resolved=$(resolve_fork_url "$dir" 2>/dev/null) || resolved_status=$?
-  [ "$resolved_status" -eq 0 ] || return 1
+  case "$resolved_status" in
+    0) ;;
+    1) resolved= ;;
+    *) return 1 ;;
+  esac
   registered=$(registered_fork_url "$dir") || return 1
-  [ -n "$registered" ] || return 1
-  [ "$resolved" = "$registered" ]
+  if [ -z "$resolved" ] && [ -z "$registered" ]; then
+    return 0
+  fi
+  [ -n "$resolved" ] && [ -n "$registered" ] && [ "$resolved" = "$registered" ]
 }
 
 cmd_init() {  # <dir>

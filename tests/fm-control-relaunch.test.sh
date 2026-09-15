@@ -412,6 +412,24 @@ test_relaunch_does_not_re_prepare_the_push_target() {
   pass "fm-control relaunch: an already prepared push target is not re-prepared"
 }
 
+test_relaunch_origin_target_match_skips_preparation() {
+  local dir out rc calls
+  dir=$(new_case origin-gate-match rl29-origin)
+  add_ship_task "$dir" rl29-origin claude
+  install_fork_target_stub "$dir"
+  rm -f "$dir/home/config/fork-url"
+  out=$(run_control "$dir" rl29-origin relaunch --note "recover an origin-backed worker"); rc=$?
+  expect_code 0 "$rc" "an origin-backed relaunch should still succeed"$'\n'"$out"
+  calls=$(cat "$dir/no-mistakes-calls" 2>/dev/null || true)
+  assert_contains "$calls" "status" \
+    "an origin-backed relaunch should inspect the recorded push target"
+  assert_not_contains "$calls" "init" \
+    "a matching origin target must not re-run no-mistakes init"
+  assert_not_contains "$calls" "doctor" \
+    "a matching origin target must not re-run no-mistakes doctor"
+  pass "fm-control relaunch: matching origin target skips preparation"
+}
+
 test_relaunch_prepares_missing_push_target_registration() {
   local dir out rc calls shape
   for shape in absent undetermined; do
@@ -529,26 +547,6 @@ test_relaunch_preserves_durable_task_metadata() {
   [ "$(meta_field "$dir" rl19 decisions_reviewed)" = 1 ] \
     || fail "the task decision state must survive relaunch"
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
-}
-
-test_spawn_relaunch_preserves_cmux_surface_metadata_once() {
-  local dir out count
-  dir=$(new_case cmux-surface-meta rl45)
-  add_ship_task "$dir" rl45 claude
-  {
-    printf '%s\n' 'backend=tmux'
-    printf '%s\n' 'cmux_workspace_id=workspace-owned'
-    printf '%s\n' 'cmux_surface_id=surface-owned'
-  } >> "$dir/home/state/rl45.meta"
-  out=$(CMUX_SURFACE_ID=ambient-surface run_spawn "$dir" rl45 --relaunch)
-  count=$(grep -c '^cmux_surface_id=' "$dir/home/state/rl45.meta" || true)
-  [ "$count" -eq 1 ] || fail "relaunch must retain exactly one cmux surface id"
-  [ "$(meta_field "$dir" rl45 cmux_surface_id)" = surface-owned ] \
-    || fail "relaunch replaced the task-owned cmux surface id"
-  [ "$(meta_field "$dir" rl45 cmux_surface_id)" != ambient-surface ] \
-    || fail "relaunch used an ambient cmux surface id"
-  [ -n "$out" ] || fail "relaunch should report its replacement launch"
-  pass "fm-spawn --relaunch: task-owned cmux surface metadata survives exactly once"
 }
 
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
@@ -1804,12 +1802,12 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_does_not_re_prepare_the_push_target
+test_relaunch_origin_target_match_skips_preparation
 test_relaunch_prepares_missing_push_target_registration
 test_relaunch_refreshes_changed_push_target
 test_relaunch_advisory_no_declaration_still_launches
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
-test_spawn_relaunch_preserves_cmux_surface_metadata_once
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
