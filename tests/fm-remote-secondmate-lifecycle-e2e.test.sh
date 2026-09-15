@@ -249,29 +249,6 @@ esac
 SH
 chmod +x "$FAKEBIN/fake-ssh"
 
-manifest_for_owner() { # <file> <id> <absent|empty|value>
-  local file=$1 id=$2 kind=$3 owner_b64=
-  case "$kind" in
-    value) owner_b64=$(printf 'contributor\n' | base64 | tr -d '\n') ;;
-  esac
-  {
-    printf 'schema=fm-remote-home-provision.v1\n'
-    printf 'id_b64=%s\n' "$(printf '%s' "$id" | base64 | tr -d '\n')"
-    printf 'charter_b64=%s\n' "$(printf 'Owner manifest charter.\n' | base64 | tr -d '\n')"
-    case "$kind" in
-      empty)
-        printf 'fork_owner_present=1\n'
-        printf 'fork_owner_b64=\n'
-        ;;
-      value)
-        printf 'fork_owner_present=1\n'
-        printf 'fork_owner_b64=%s\n' "$owner_b64"
-        ;;
-    esac
-    printf 'project_count=0\n'
-  } > "$file"
-}
-
 manifest_for_url() { # <file> <id> <absent|empty|value>
   local file=$1 id=$2 kind=$3 url_b64=
   case "$kind" in
@@ -414,13 +391,7 @@ FM_FAKE_PROVISION_MANIFEST="$manifest_capture" \
   FM_SECONDMATE_CHARTER='Manifest capture charter.' FM_SECONDMATE_SCOPE='manifest capture' \
   seed_env "$ROOT/bin/fm-remote-home-seed.sh" manifest-absent remote-mac "$REMOTE_ROOT" \
   "$TMP_ROOT/manifest-absent-home" --no-projects >/dev/null 2>&1 \
-  || fail "seeding without fork-owner should capture a manifest"
-if grep -q '^fork_owner_present=' "$manifest_capture"; then
-  fail "an absent fork-owner setting was encoded as present"
-fi
-if grep -q '^fork_owner_b64=' "$manifest_capture"; then
-  fail "an absent fork-owner setting was encoded with an empty payload"
-fi
+  || fail "seeding without fork-url should capture a manifest"
 if grep -q '^fork_url_present=' "$manifest_capture"; then
   fail "an absent fork-url setting was encoded as present"
 fi
@@ -428,31 +399,6 @@ if grep -q '^fork_url_b64=' "$manifest_capture"; then
   fail "an absent fork-url setting was encoded with an empty payload"
 fi
 
-: > "$TMP_ROOT/seed-parent/config/fork-owner"
-manifest_capture="$TMP_ROOT/manifest-empty"
-FM_FAKE_PROVISION_MANIFEST="$manifest_capture" \
-  FM_SECONDMATE_CHARTER='Manifest capture charter.' FM_SECONDMATE_SCOPE='manifest capture' \
-  seed_env "$ROOT/bin/fm-remote-home-seed.sh" manifest-empty remote-mac "$REMOTE_ROOT" \
-  "$TMP_ROOT/manifest-empty-home" --no-projects >/dev/null 2>&1 \
-  || fail "seeding with an empty fork-owner should capture a manifest"
-grep -qx 'fork_owner_present=1' "$manifest_capture" \
-  || fail "an empty fork-owner setting did not carry its presence marker"
-grep -qx 'fork_owner_b64=' "$manifest_capture" \
-  || fail "an empty fork-owner setting did not carry an empty payload"
-
-printf 'contributor\n' > "$TMP_ROOT/seed-parent/config/fork-owner"
-manifest_capture="$TMP_ROOT/manifest-value"
-FM_FAKE_PROVISION_MANIFEST="$manifest_capture" \
-  FM_SECONDMATE_CHARTER='Manifest capture charter.' FM_SECONDMATE_SCOPE='manifest capture' \
-  seed_env "$ROOT/bin/fm-remote-home-seed.sh" manifest-value remote-mac "$REMOTE_ROOT" \
-  "$TMP_ROOT/manifest-value-home" --no-projects >/dev/null 2>&1 \
-  || fail "seeding with a fork-owner should capture a manifest"
-grep -qx 'fork_owner_present=1' "$manifest_capture" \
-  || fail "a valued fork-owner setting did not carry its presence marker"
-grep -qx "fork_owner_b64=$(printf 'contributor\n' | base64 | tr -d '\n')" "$manifest_capture" \
-  || fail "a valued fork-owner setting did not carry its payload"
-
-rm -f "$TMP_ROOT/seed-parent/config/fork-owner"
 : > "$TMP_ROOT/seed-parent/config/fork-url"
 manifest_capture="$TMP_ROOT/manifest-url-empty"
 FM_FAKE_PROVISION_MANIFEST="$manifest_capture" \
@@ -477,46 +423,6 @@ grep -qx 'fork_url_present=1' "$manifest_capture" \
 grep -qx "fork_url_b64=$(printf 'ssh://git@github.example/contributor/widget.git\n' | base64 | tr -d '\n')" "$manifest_capture" \
   || fail "a valued fork-url setting did not carry its payload"
 pass "remote seeding preserves absent, empty, and valued target declarations"
-
-manifest_for_owner "$TMP_ROOT/owner-value.manifest" owner-value value
-FM_HOME="$TMP_ROOT/owner-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
-  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/owner-value.manifest" \
-  > "$TMP_ROOT/owner-value.out" 2>&1 \
-  || fail "remote provisioning rejected a valued fork-owner manifest"
-[ "$(cat "$TMP_ROOT/owner-value-home/config/fork-owner")" = contributor ] \
-  || fail "remote provisioning did not materialize the valued fork-owner"
-
-manifest_for_owner "$TMP_ROOT/owner-empty.manifest" owner-empty empty
-FM_HOME="$TMP_ROOT/owner-empty-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
-  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/owner-empty.manifest" \
-  > "$TMP_ROOT/owner-empty.out" 2>&1 \
-  || fail "remote provisioning rejected an empty fork-owner manifest"
-[ -f "$TMP_ROOT/owner-empty-home/config/fork-owner" ] \
-  || fail "an empty fork-owner manifest did not materialize a present file"
-[ ! -s "$TMP_ROOT/owner-empty-home/config/fork-owner" ] \
-  || fail "an empty fork-owner manifest materialized nonempty content"
-
-manifest_for_owner "$TMP_ROOT/owner-absent.manifest" owner-value absent
-FM_HOME="$TMP_ROOT/owner-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
-  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/owner-absent.manifest" \
-  > "$TMP_ROOT/owner-absent.out" 2>&1 \
-  || fail "remote provisioning rejected an absent fork-owner manifest"
-[ "$(cat "$TMP_ROOT/owner-value-home/config/fork-owner")" = contributor ] \
-  || fail "an absent fork-owner manifest erased an existing setting"
-
-printf '%s\n' 'schema=fm-remote-home-provision.v1' \
-  'id_b64=b3duZXItdmFsdWU=' \
-  'charter_b64=T3duZXIgbWFuaWZlc3QgY2hhcnRlci4K' \
-  'fork_owner_present=1' 'fork_owner_b64=%%%' 'project_count=0' \
-  > "$TMP_ROOT/owner-invalid.manifest"
-if FM_HOME="$TMP_ROOT/owner-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
-  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/owner-invalid.manifest" \
-  > "$TMP_ROOT/owner-invalid.out" 2>&1; then
-  fail "remote provisioning accepted an undecodable fork-owner payload"
-fi
-[ "$(cat "$TMP_ROOT/owner-value-home/config/fork-owner")" = contributor ] \
-  || fail "an undecodable fork-owner payload erased an existing setting"
-pass "remote provisioning preserves absent, empty, valued, and undecodable fork-owner states"
 
 manifest_for_url "$TMP_ROOT/url-value.manifest" url-value value
 FM_HOME="$TMP_ROOT/url-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \

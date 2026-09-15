@@ -149,14 +149,6 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-home-seed.XXXXXX") || die "cannot cre
 REG_EXISTED=0
 [ -f "$REG" ] && { cp "$REG" "$TMP/registry.before"; REG_EXISTED=1; }
 
-FORK_OWNER_PRESENT=$(fm_config_source_present "$CONFIG/fork-owner") \
-  || die "cannot inspect config/fork-owner"
-FORK_OWNER_B64=
-if [ "$FORK_OWNER_PRESENT" = 1 ]; then
-  [ -f "$CONFIG/fork-owner" ] && [ ! -L "$CONFIG/fork-owner" ] \
-    || die "config/fork-owner is not a regular file"
-  FORK_OWNER_B64=$(encode < "$CONFIG/fork-owner")
-fi
 FORK_URL_PRESENT=$(fm_config_source_present "$CONFIG/fork-url") \
   || die "cannot inspect config/fork-url"
 FORK_URL_B64=
@@ -220,10 +212,6 @@ done
   # back; the parent's real filesystem path is never sent, since it names
   # nothing on the remote filesystem.
   printf 'parent_host_b64=%s\n' "$(printf '%s' "$HOST" | encode)"
-  if [ "$FORK_OWNER_PRESENT" = 1 ]; then
-    printf 'fork_owner_present=1\n'
-    printf 'fork_owner_b64=%s\n' "$FORK_OWNER_B64"
-  fi
   if [ "$FORK_URL_PRESENT" = 1 ]; then
     printf 'fork_url_present=1\n'
     printf 'fork_url_b64=%s\n' "$FORK_URL_B64"

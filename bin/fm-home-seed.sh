@@ -290,7 +290,7 @@ validate_operational_dirs() {
 validate_seed_leaf_files() {
   local home=$1 label path abs_home abs_path
   abs_home=$(resolved_path "$home")
-  for label in "data/projects.md" "data/charter.md" "config/fork-url" "config/fork-owner" "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
+  for label in "data/projects.md" "data/charter.md" "config/fork-url" "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
     path="$home/$label"
     if [ -L "$path" ]; then
       echo "error: secondmate leaf file must not be a symlink: $path" >&2
@@ -532,7 +532,6 @@ SEED_PARENT_BRIEF_DIR_CREATED=0
 SEED_SUB_REG_EXISTED=0
 SEED_CHARTER_EXISTED=0
 SEED_FORK_URL_EXISTED=0
-SEED_FORK_OWNER_EXISTED=0
 SEED_MARKER_EXISTED=0
 SEED_PARENT_MARKER_EXISTED=0
 
@@ -658,7 +657,6 @@ seed_rollback() {
         restore_seed_file "$SEED_CHARTER_EXISTED" "$SEED_BACKUP_DIR/charter.md" "$SEED_HOME/data/charter.md"
         restore_seed_file "$SEED_SUB_REG_EXISTED" "$SEED_BACKUP_DIR/sub-projects.md" "$SEED_HOME/data/projects.md"
         restore_seed_file "$SEED_FORK_URL_EXISTED" "$SEED_BACKUP_DIR/fork-url" "$SEED_HOME/config/fork-url"
-        restore_seed_file "$SEED_FORK_OWNER_EXISTED" "$SEED_BACKUP_DIR/fork-owner" "$SEED_HOME/config/fork-owner"
       fi
     fi
   fi
@@ -729,12 +727,12 @@ initialize_no_mistakes_project() {
     echo "error: no-mistakes command not found; cannot initialize $project in $home" >&2
     return 1
   }
-  if ! FM_INHERITABLE_CONFIG='fork-url fork-owner' \
+  if ! FM_INHERITABLE_CONFIG='fork-url' \
     propagate_inheritable_config "$CONFIG" "$home/config"; then
     echo "error: failed to inherit fork target configuration before initializing $project in $home" >&2
     return 1
   fi
-  for target_config in fork-url fork-owner; do
+  for target_config in fork-url; do
     if [ -f "$CONFIG/$target_config" ] && ! cmp -s "$CONFIG/$target_config" "$home/config/$target_config"; then
       echo "error: $target_config was not inherited before initializing $project in $home" >&2
       return 1
@@ -872,7 +870,6 @@ seed_home() {
   SEED_PARENT_BRIEF_DIR_CREATED=0
   SEED_SUB_REG_EXISTED=0
   SEED_CHARTER_EXISTED=0
-  SEED_FORK_OWNER_EXISTED=0
   SEED_FORK_URL_EXISTED=0
   SEED_MARKER_EXISTED=0
   if [ -f "$REG" ]; then
@@ -913,10 +910,6 @@ seed_home() {
   if [ -f "$home/data/charter.md" ]; then
     SEED_CHARTER_EXISTED=1
     cp "$home/data/charter.md" "$SEED_BACKUP_DIR/charter.md"
-  fi
-  if [ -f "$home/config/fork-owner" ]; then
-    SEED_FORK_OWNER_EXISTED=1
-    cp "$home/config/fork-owner" "$SEED_BACKUP_DIR/fork-owner"
   fi
   if [ -f "$home/config/fork-url" ]; then
     SEED_FORK_URL_EXISTED=1
