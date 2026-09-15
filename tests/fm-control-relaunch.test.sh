@@ -370,6 +370,35 @@ test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven() {
   pass "fm-control relaunch: an unreadable composer fails safe before the exit command is typed"
 }
 
+# A relaunch drops a replacement agent into an EXISTING task's existing local
+# copy, whose gate was prepared when that task first spawned. Re-preparing it
+# here is redundant work on the path that recovers a stuck worker, and it used
+# to run the real `no-mistakes init` and `doctor` before the replacement could
+# even be launched. A recording stub proves the calls are gone rather than
+# merely fast.
+test_relaunch_does_not_re_prepare_the_push_target() {
+  local dir out rc calls
+  dir=$(new_case no-gate-prep rl29)
+  add_ship_task "$dir" rl29 claude
+  cat > "$dir/fakebin/no-mistakes" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/no-mistakes-calls"
+exit 0
+SH
+  chmod +x "$dir/fakebin/no-mistakes"
+  out=$(run_control "$dir" rl29 relaunch --note "recovering a stuck worker"); rc=$?
+  expect_code 0 "$rc" "the relaunch itself should still succeed"$'\n'"$out"
+  # Reading pipeline state is fine and expected; PREPARING the gate is not.
+  calls=$(cat "$dir/no-mistakes-calls" 2>/dev/null || true)
+  assert_not_contains "$calls" "init" \
+    "a relaunch must not run no-mistakes init to re-prepare an already prepared gate"
+  assert_not_contains "$calls" "doctor" \
+    "a relaunch must not run no-mistakes doctor on the recovery path"
+  assert_not_contains "$out" "fork target:" \
+    "a relaunch must not report push-target resolution at all"
+  pass "fm-control relaunch: an already prepared push target is not re-prepared"
+}
+
 test_relaunch_from_linked_home_preserves_recorded_worktree() {
   local dir out rc head fetch_head
   dir=$(new_case linked-home rl42)
@@ -1684,6 +1713,7 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
+test_relaunch_does_not_re_prepare_the_push_target
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication

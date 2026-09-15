@@ -219,6 +219,47 @@ test_init_without_declaration_uses_origin() {
   pass "init preserves the maintainer origin path when unconfigured"
 }
 
+# A PATH with every other tool intact but no `no-mistakes` at all. The binary's
+# absence is classified like any other initialization failure, so it needs the
+# real tool genuinely missing rather than stubbed.
+path_without_no_mistakes() {
+  local nm nmdir
+  nm=$(command -v no-mistakes 2>/dev/null) || { printf '%s' "$PATH"; return 0; }
+  nmdir=$(dirname "$nm")
+  printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$nmdir" | paste -sd: -
+}
+
+# The tool-presence check runs after resolution and is classified the same way
+# as an init failure, so these are the two sides of that boundary.
+test_missing_no_mistakes_is_advisory_without_a_declaration() {
+  local d status clean_path err; d=$(new_case missing-nm-undeclared)
+  set_origin "$d" https://github.com/acme/widget.git
+  clean_path=$(path_without_no_mistakes)
+  status=0
+  PATH="$clean_path" FM_HOME="$d/home" \
+    "$FORK_TARGET" init "$d/repo" >/dev/null 2>"$d/err" || status=$?
+  expect_code 4 "$status" "a missing binary with no declaration must be advisory"
+  err=$(cat "$d/err")
+  assert_contains "$err" "no-mistakes command not found" "the advisory must name what is missing"
+  assert_contains "$err" "warning" "the advisory must not masquerade as an error"
+  pass "a missing no-mistakes without a declaration is advisory, not fatal"
+}
+
+test_missing_no_mistakes_is_fatal_with_a_declaration() {
+  local d status clean_path err; d=$(new_case missing-nm-declared)
+  set_origin "$d" https://github.com/acme/widget.git
+  printf 'ssh://git@github.example/contributor/widget.git\n' > "$d/home/config/fork-url"
+  clean_path=$(path_without_no_mistakes)
+  status=0
+  PATH="$clean_path" FM_HOME="$d/home" \
+    "$FORK_TARGET" init "$d/repo" >/dev/null 2>"$d/err" || status=$?
+  expect_code 1 "$status" "a missing binary with a declared url must be fatal"
+  err=$(cat "$d/err")
+  assert_contains "$err" "ssh://git@github.example/contributor/widget.git" \
+    "the refusal must name the declared target it could not honor"
+  pass "a missing no-mistakes with a declared url refuses"
+}
+
 test_existing_registration_is_preserved_on_failure() {
   local d status; d=$(new_case existing-registration)
   make_fakebin "$d" >/dev/null; set_origin "$d" https://github.com/acme/widget.git
@@ -253,5 +294,7 @@ test_absent_declaration_is_empty_success
 test_resolution_does_not_read_git_or_network
 test_init_passes_declared_url_verbatim
 test_init_without_declaration_uses_origin
+test_missing_no_mistakes_is_advisory_without_a_declaration
+test_missing_no_mistakes_is_fatal_with_a_declaration
 test_existing_registration_is_preserved_on_failure
 test_usage_error_exits_2

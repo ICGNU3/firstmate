@@ -21,10 +21,12 @@
 # `init` exit status, which callers are expected to discriminate:
 #   0  the gate is initialized against the resolved target
 #   1  something is wrong and the caller must stop: resolution errored, the
-#      declaration is unusable, or a DECLARED fork url could not be initialized
+#      declaration is unusable, or a DECLARED fork url could not be initialized,
+#      including when `no-mistakes` itself is not installed
 #   4  ADVISORY - no fork url is declared here, so the target is origin, and
-#      preparing that gate failed. The declared-target guarantee is not at
-#      stake, so a caller whose own work is not a push may warn and continue.
+#      preparing that gate failed, `no-mistakes` being absent included. The
+#      declared-target guarantee is not at stake, so a caller whose own work is
+#      not a push may warn and continue.
 #      The guard against pushing to an unwritable target lives at push time, in
 #      the generated worker instructions and in `no-mistakes init` itself; this
 #      status only says the gate was not freshly prepared here.
@@ -188,7 +190,11 @@ cmd_init() {  # <dir>
   local dir=$1 url status
   [ -d "$dir" ] || die "not a directory: $dir"
   git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository: $dir"
-  command -v no-mistakes >/dev/null 2>&1 || die "no-mistakes command not found"
+  # The tool-presence check runs AFTER resolution, and is classified exactly
+  # like any other initialization failure. Resolution is pure local config
+  # reading and needs no binary at all, so letting it run first loses nothing
+  # and lets a missing `no-mistakes` be fatal only where a declared target is
+  # actually at stake.
   status=0
   url=$(resolve_fork_url "$dir") || status=$?
   case "$status" in
@@ -197,6 +203,8 @@ cmd_init() {  # <dir>
       # operator named this url, so silently leaving the gate pointed somewhere
       # else is the exact failure this script exists to prevent.
       printf 'fork target: %s\n' "$url"
+      command -v no-mistakes >/dev/null 2>&1 \
+        || die "no-mistakes command not found, so declared fork url $url cannot be initialized"
       ( cd "$dir" && no-mistakes init --fork-url "$url" ) || die "no-mistakes init failed for $dir"
       ( cd "$dir" && no-mistakes doctor ) || die "no-mistakes doctor failed for $dir"
       return 0
@@ -209,6 +217,10 @@ cmd_init() {  # <dir>
       # that cannot start work on a failure here would be stopped by ordinary
       # gate trouble hours before any push exists.
       printf 'fork target: origin (no fork configured or resolvable for this home)\n'
+      if ! command -v no-mistakes >/dev/null 2>&1; then
+        printf 'warning: no-mistakes command not found and no fork url is declared in this home, so the gate keeps whatever target it already had\n' >&2
+        return 4
+      fi
       if ! ( cd "$dir" && no-mistakes init ); then
         printf 'warning: no-mistakes init failed for %s and no fork url is declared in this home, so the gate keeps whatever target it already had\n' "$dir" >&2
         return 4
