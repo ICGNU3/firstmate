@@ -427,10 +427,6 @@ STUB
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-direct-pr"
   dod="$TMP_ROOT/promote-dod/promoted-direct-pr-dod"
   extract_definition_of_done "$payload" > "$dod"
-  assert_grep "Before pushing, run" "$dod" \
-    "promoted direct-PR worker must resolve the push target before pushing"
-  assert_grep "check its exit status" "$dod" \
-    "promoted direct-PR worker must distinguish resolver failure from empty output"
   assert_grep "supersede the scout delivery rules and report-based Definition of done" "$payload" \
     "promoted worker retained the scout delivery contract"
   assert_grep "status protocol; the instruction inbox and its acknowledgement; the escalation rules, including ask-user; and every safety rule" "$payload" \

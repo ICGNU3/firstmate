@@ -323,6 +323,7 @@ remote_env() {
   FM_FAKE_INHERIT_ENTERED="$TMP_ROOT/inherit.entered" \
   FM_FAKE_INHERIT_RELEASE="$TMP_ROOT/inherit.release" \
   FM_FAKE_INHERIT_PAYLOAD="$TMP_ROOT/inherit.payload" \
+  FM_FAKE_NO_MISTAKES_FAIL_MARKER="$TMP_ROOT/no-mistakes-init-failed" \
   FM_FAKE_LAUNCH_ENTERED="$TMP_ROOT/launch.entered" \
   FM_FAKE_LAUNCH_RELEASE="$TMP_ROOT/launch.release" \
   FM_SEND_SETTLE=0 FM_SEND_SLEEP=0 FM_REMOTE_REPLY_WAIT_SECONDS=10 \
@@ -510,6 +511,10 @@ cat > "$FAKEBIN/no-mistakes" <<SH
 set -eu
 if [ "\${1:-}" = init ]; then
   printf '%s\t%s\t%s\n' "\$PWD" "\$1" "\$(cat "\$FM_HOME/config/fork-url")" >> "$NM_LOG"
+  if [ "\${FM_FAKE_NO_MISTAKES_FAIL_ONCE:-0}" = 1 ] && [ ! -e "\$FM_FAKE_NO_MISTAKES_FAIL_MARKER" ]; then
+    touch "\$FM_FAKE_NO_MISTAKES_FAIL_MARKER"
+    exit 1
+  fi
   if [ "\${2:-}" = --fork-url ]; then
     git remote remove no-mistakes >/dev/null 2>&1 || true
     git remote add no-mistakes "\$3"
@@ -539,6 +544,27 @@ grep -F "init$(printf '\t')ssh://github.example/owner/second.git" "$NM_LOG" >/de
 [ "$(grep -c "$(printf '\t')doctor$" "$NM_LOG")" -eq 2 ] \
   || fail "remote no-mistakes target refresh did not run doctor for both provisions"
 pass "remote provisioning refreshes existing no-mistakes project targets"
+
+RETRY_HOME="$TMP_ROOT/no-mistakes-retry-home"
+rm -f "$TMP_ROOT/no-mistakes-init-failed"
+manifest_for_no_mistakes_project "$TMP_ROOT/no-mistakes-retry.manifest" no-mistakes-retry-home "$NM_ORIGIN" ssh://github.example/owner/retry.git
+if FM_FAKE_NO_MISTAKES_FAIL_ONCE=1 PATH="$FAKEBIN:$PATH" FM_HOME="$RETRY_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/no-mistakes-retry.manifest" \
+  > "$TMP_ROOT/no-mistakes-retry-first.out" 2>&1; then
+  fail "remote provisioning succeeded despite a post-publication initialization failure"
+fi
+assert_present "$RETRY_HOME/projects/alpha-nm" "failed remote initialization removed the published project"
+assert_present "$RETRY_HOME/.fm-secondmate-pending-no-mistakes" \
+  "failed remote initialization did not leave a retry marker"
+FM_HOME="$RETRY_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  PATH="$FAKEBIN:$PATH" "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/no-mistakes-retry.manifest" \
+  > "$TMP_ROOT/no-mistakes-retry-second.out" 2>&1 \
+  || fail "remote provisioning retry did not repair post-publication initialization"
+assert_absent "$RETRY_HOME/.fm-secondmate-pending-no-mistakes" \
+  "successful remote retry left a stale initialization marker"
+git -C "$RETRY_HOME/projects/alpha-nm" remote get-url no-mistakes >/dev/null 2>&1 \
+  || fail "successful remote retry did not initialize the project gate"
+pass "remote provisioning retries failed post-publication initialization"
 
 mv "$TMP_ROOT/seed-parent/config" "$TMP_ROOT/seed-parent/config-real"
 ln -s "$TMP_ROOT/seed-parent/config-real" "$TMP_ROOT/seed-parent/config"

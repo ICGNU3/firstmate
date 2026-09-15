@@ -24,6 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME=${FM_HOME:?FM_HOME is required}
 MAX_MANIFEST_BYTES=1048576
+PENDING_NO_MISTAKES_MARKER=".fm-secondmate-pending-no-mistakes"
 
 # shellcheck source=bin/fm-project-origin-lib.sh
 . "$SCRIPT_DIR/fm-project-origin-lib.sh"
@@ -44,6 +45,42 @@ manifest_value() { # <file> <key>
 }
 
 safe_id() { case "$1" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
+
+pending_no_mistakes_contains() {
+  local project=$1 marker="$FM_HOME/$PENDING_NO_MISTAKES_MARKER"
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
+  grep -Fx -- "$project" "$marker" >/dev/null 2>&1
+}
+
+pending_no_mistakes_write() {
+  local marker="$FM_HOME/$PENDING_NO_MISTAKES_MARKER" tmp dedup
+  tmp="$marker.tmp.$$"
+  dedup="$marker.dedup.$$"
+  : > "$tmp"
+  if [ -f "$marker" ]; then
+    cat "$marker" >> "$tmp"
+  fi
+  cat "$NO_MISTAKES_PROJECTS" >> "$tmp"
+  awk 'NF && !seen[$0]++' "$tmp" > "$dedup"
+  if [ -s "$dedup" ]; then
+    mv -f -- "$dedup" "$marker"
+  else
+    rm -f -- "$marker" "$dedup"
+  fi
+  rm -f -- "$tmp"
+}
+
+pending_no_mistakes_remove() {
+  local project=$1 marker="$FM_HOME/$PENDING_NO_MISTAKES_MARKER" tmp
+  [ -f "$marker" ] || return 0
+  tmp="$marker.tmp.$$"
+  grep -Fvx -- "$project" "$marker" > "$tmp" || true
+  if [ -s "$tmp" ]; then
+    mv -f -- "$tmp" "$marker"
+  else
+    rm -f -- "$tmp" "$marker"
+  fi
+}
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-provision.XXXXXX") || die "cannot create provisioning state"
 CREATED_HOME=0
@@ -179,7 +216,7 @@ if [ -e "$FM_HOME" ] || [ -L "$FM_HOME" ]; then
     fi
   done
   mkdir -p "$TMP/before/data"
-  for rel in data/charter.md data/projects.md config/fork-url .fm-secondmate-home .fm-secondmate-parent; do
+  for rel in data/charter.md data/projects.md config/fork-url .fm-secondmate-home .fm-secondmate-parent "$PENDING_NO_MISTAKES_MARKER"; do
     existing="$FM_HOME/$rel"
     if [ -e "$existing" ] || [ -L "$existing" ]; then
       [ -f "$existing" ] && [ ! -L "$existing" ] || die "existing remote home has unsafe owned file: $rel"
@@ -269,7 +306,8 @@ EOF
     git clone --quiet -- "$ORIGIN" "$DEST" || die "could not clone project $NAME on the remote host"
   fi
   if [ "$MODE" = no-mistakes ]; then
-    if [ "$PROJECT_CREATED" -eq 0 ] && ! git -C "$DEST" remote get-url no-mistakes >/dev/null 2>&1; then
+    if [ "$PROJECT_CREATED" -eq 0 ] && ! git -C "$DEST" remote get-url no-mistakes >/dev/null 2>&1 \
+      && ! pending_no_mistakes_contains "$NAME"; then
       die "existing no-mistakes project $NAME is not initialized"
     fi
     printf '%s\n' "$NAME" >> "$NO_MISTAKES_PROJECTS"
@@ -290,6 +328,7 @@ mv -f -- "$FM_HOME/data/projects.md.tmp.$$" "$FM_HOME/data/projects.md"
 mv -f -- "$FM_HOME/.fm-secondmate-parent.tmp.$$" "$FM_HOME/.fm-secondmate-parent"
 printf '%s\n' "$ID" > "$FM_HOME/.fm-secondmate-home.tmp.$$"
 mv -f -- "$FM_HOME/.fm-secondmate-home.tmp.$$" "$FM_HOME/.fm-secondmate-home"
+pending_no_mistakes_write
 PUBLISHED=1
 while IFS= read -r NAME; do
   [ -n "$NAME" ] || continue
@@ -297,6 +336,7 @@ while IFS= read -r NAME; do
   command -v no-mistakes >/dev/null 2>&1 || die "no-mistakes is unavailable for project $NAME"
   FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fork-target.sh" init "$DEST" >/dev/null \
     || die "no-mistakes initialization failed for project $NAME"
+  pending_no_mistakes_remove "$NAME"
 done < "$NO_MISTAKES_PROJECTS"
 release_provision_lock
 trap - EXIT

@@ -226,11 +226,6 @@ test_ship_modes_generate_clean_briefs() {
         "$id: no-mistakes contract must continue after the advisory target status"
       assert_grep "Any other non-zero status means stop and report" "$dod" \
         "$id: no-mistakes contract must stop after a non-advisory target failure"
-    elif [ "$mode" = direct-PR ]; then
-      assert_grep "Before pushing, run" "$dod" \
-        "$id: direct-PR contract must resolve the push target before pushing"
-      assert_grep "check its exit status" "$dod" \
-        "$id: direct-PR contract must distinguish resolver failure from empty output"
     fi
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \

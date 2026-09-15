@@ -41,6 +41,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
 SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
+PENDING_NO_MISTAKES_MARKER=".fm-secondmate-pending-no-mistakes"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
@@ -289,7 +290,7 @@ validate_operational_dirs() {
 validate_seed_leaf_files() {
   local home=$1 label path abs_home abs_path
   abs_home=$(resolved_path "$home")
-  for label in "data/projects.md" "data/charter.md" "config/fork-url" "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
+  for label in "data/projects.md" "data/charter.md" "config/fork-url" "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER" "$PENDING_NO_MISTAKES_MARKER"; do
     path="$home/$label"
     if [ -L "$path" ]; then
       echo "error: secondmate leaf file must not be a symlink: $path" >&2
@@ -534,6 +535,7 @@ SEED_CHARTER_EXISTED=0
 SEED_FORK_URL_EXISTED=0
 SEED_MARKER_EXISTED=0
 SEED_PARENT_MARKER_EXISTED=0
+SEED_PENDING_INIT_EXISTED=0
 
 restore_seed_file() {
   local existed=$1 backup=$2 path=$3
@@ -657,6 +659,7 @@ seed_rollback() {
         restore_seed_file "$SEED_CHARTER_EXISTED" "$SEED_BACKUP_DIR/charter.md" "$SEED_HOME/data/charter.md"
         restore_seed_file "$SEED_SUB_REG_EXISTED" "$SEED_BACKUP_DIR/sub-projects.md" "$SEED_HOME/data/projects.md"
         restore_seed_file "$SEED_FORK_URL_EXISTED" "$SEED_BACKUP_DIR/fork-url" "$SEED_HOME/config/fork-url"
+        restore_seed_file "$SEED_PENDING_INIT_EXISTED" "$SEED_BACKUP_DIR/pending-no-mistakes" "$SEED_HOME/$PENDING_NO_MISTAKES_MARKER"
       fi
     fi
   fi
@@ -681,6 +684,50 @@ project_mode_in_home() {
 $(FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_HOME="$home" "$FM_ROOT/bin/fm-project-mode.sh" "$project")
 EOF
   printf '%s\n' "$mode"
+}
+
+pending_no_mistakes_contains() {
+  local home=$1 project=$2 marker="$home/$PENDING_NO_MISTAKES_MARKER"
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
+  grep -Fx -- "$project" "$marker" >/dev/null 2>&1
+}
+
+pending_no_mistakes_write() {
+  local home=$1 project mode project_dst marker tmp dedup
+  shift
+  marker="$home/$PENDING_NO_MISTAKES_MARKER"
+  tmp="$marker.tmp.$$"
+  dedup="$marker.dedup.$$"
+  : > "$tmp"
+  if [ -f "$marker" ]; then
+    cat "$marker" >> "$tmp"
+  fi
+  for project in "$@"; do
+    mode=$(project_mode_in_home "$home" "$project")
+    [ "$mode" = no-mistakes ] || continue
+    project_dst="$home/projects/$project"
+    seed_project_was_created "$project_dst" || continue
+    printf '%s\n' "$project" >> "$tmp"
+  done
+  awk 'NF && !seen[$0]++' "$tmp" > "$dedup"
+  if [ -s "$dedup" ]; then
+    mv -f -- "$dedup" "$marker"
+  else
+    rm -f -- "$marker" "$dedup"
+  fi
+  rm -f -- "$tmp"
+}
+
+pending_no_mistakes_remove() {
+  local home=$1 project=$2 marker="$home/$PENDING_NO_MISTAKES_MARKER" tmp
+  [ -f "$marker" ] || return 0
+  tmp="$marker.tmp.$$"
+  grep -Fvx -- "$project" "$marker" > "$tmp" || true
+  if [ -s "$tmp" ]; then
+    mv -f -- "$tmp" "$marker"
+  else
+    rm -f -- "$tmp" "$marker"
+  fi
 }
 
 sync_project_registry() {
@@ -737,7 +784,7 @@ initialize_no_mistakes_project() {
   dst=$(validate_project_destination "$home" "$project") || return 1
   if git -C "$dst" remote get-url no-mistakes >/dev/null 2>&1; then
     :
-  elif [ "$created" != 1 ]; then
+  elif [ "$created" != 1 ] && ! pending_no_mistakes_contains "$home" "$project"; then
     echo "error: seeded project $project at $dst is not initialized for no-mistakes; refusing to mutate preexisting clone" >&2
     return 1
   fi
@@ -749,6 +796,7 @@ initialize_no_mistakes_project() {
     echo "error: failed to initialize no-mistakes for $project at $dst" >&2
     return 1
   }
+  pending_no_mistakes_remove "$home" "$project"
 }
 
 write_registry() {
@@ -926,6 +974,10 @@ seed_home() {
     SEED_PARENT_MARKER_EXISTED=1
     cp "$home/$SUB_HOME_PARENT_MARKER" "$SEED_BACKUP_DIR/parent-marker"
   fi
+  if [ -f "$home/$PENDING_NO_MISTAKES_MARKER" ]; then
+    SEED_PENDING_INIT_EXISTED=1
+    cp "$home/$PENDING_NO_MISTAKES_MARKER" "$SEED_BACKUP_DIR/pending-no-mistakes"
+  fi
   SEED_HOME_BACKED_UP=1
   inherit_fork_url "$home" || return 1
 
@@ -981,6 +1033,7 @@ seed_home() {
   mv -f -- "$home/$SUB_HOME_MARKER.tmp.$$" "$home/$SUB_HOME_MARKER"
   write_registry "$id" "$home" "$projects_csv" "$SEED_PARENT_BRIEF"
   validate_registry
+  pending_no_mistakes_write "$home" "$@"
   SEED_COMMITTED=1
   for project in "$@"; do
     project_dst=$(validate_project_destination "$home" "$project") || return 1

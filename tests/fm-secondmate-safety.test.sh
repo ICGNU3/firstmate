@@ -1180,7 +1180,18 @@ test_home_seed_refreshes_initialized_existing_no_mistakes_projects() {
   [ "$(cat "$subhome/config/fork-url")" = 'https://github.example/contributor/new-widget.git' ] \
     || fail "post-publication target refresh rolled back the committed fork-url"
   [ -e "$subhome/projects/beta" ] || fail "post-publication target refresh rolled back a committed project clone"
-  pass "home seeding keeps the committed seed when post-publication refresh fails"
+  [ "$(cat "$subhome/.fm-secondmate-pending-no-mistakes")" = beta ] \
+    || fail "failed post-publication initialization did not leave a retry marker"
+
+  PATH="$fakebin:$PATH" FM_FAKE_NO_MISTAKES_LOG="$log" \
+    FM_HOME="$home" FM_SECONDMATE_CHARTER='existing init rollback scope' FM_SECONDMATE_SCOPE='existing init rollback scope' \
+    "$ROOT/bin/fm-home-seed.sh" design "$subhome" alpha beta >/dev/null \
+    || fail "retry did not repair the failed post-publication initialization"
+  [ -f "$subhome/projects/beta/.no-mistakes-init" ] \
+    || fail "retry did not initialize the previously failed project"
+  [ ! -e "$subhome/.fm-secondmate-pending-no-mistakes" ] \
+    || fail "successful retry left a stale post-publication initialization marker"
+  pass "home seeding retries failed post-publication initialization"
 }
 
 test_home_seed_inherits_fork_url_before_refreshing_initialized_existing_project() {
