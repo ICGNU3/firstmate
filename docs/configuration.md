@@ -227,7 +227,7 @@ Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](f
 The no-mistakes gate pushes a validated branch to the repo it was initialized against, which `no-mistakes init` takes from the clone's `origin`.
 When this home's authenticated forge account has only read access to that repo, the run reaches its `push` step with a 403 and the whole run is recorded failed although the code validated.
 [`bin/fm-fork-target.sh`](../bin/fm-fork-target.sh) is the single owner of which push target firstmate initializes a clone against, and its header owns the declaration contract.
-Optional `config/fork-url` holds one complete push URL and is used verbatim. It is LOCAL, gitignored, applies to every project in the home, is inherited by secondmate homes, and takes precedence when `config/fork-owner` is also present.
+Optional `config/fork-url` holds one complete push URL and is used verbatim. It must be an `https://`, `http://`, `ssh://`, `git+ssh://`, or `file://` URL with the required host/path shape, or a standard `user@host:path` form. It is LOCAL, gitignored, applies to every project in the home, is inherited by secondmate homes, and takes precedence when `config/fork-owner` is also present; invalid declarations fail closed before initialization.
 Optional `config/fork-owner` holds one token: the forge account this home owns its forks under. It is LOCAL, gitignored, applies to every project in the home, and is inherited by secondmate homes; the resolver assembles a target from each clone's forge origin.
 When neither declaration is present, the gate is initialized against `origin` exactly as before. Resolution is local and does not use `gh` or infer a target from network state.
 

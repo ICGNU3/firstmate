@@ -29,6 +29,8 @@
 # A configured and usable target is printed with exit 0. No declaration prints
 # nothing with exit 0. An unusable declaration or internal error prints nothing
 # on stdout, names the problem on stderr, and exits non-zero.
+# config/fork-url accepts https/http/ssh/git+ssh/file URLs with a host and path,
+# or a standard user@host:path push URL; accepted values are never rewritten.
 #
 # `no-mistakes init` refreshes an existing registration, so `init` is also the
 # repair path for a home whose gate was already initialized against an
@@ -108,6 +110,50 @@ config_token() {  # <name>
   printf '%s' "$value"
 }
 
+fork_url_validate() {  # <url>
+  local url=${1:-} rest authority path user host
+  case "$url" in
+    https://*|http://*|ssh://*|git+ssh://*)
+      rest=${url#*://}
+      case "$rest" in
+        */*)
+          authority=${rest%%/*}
+          path=${rest#*/}
+          host=${authority##*@}
+          [ -n "$host" ] && [ -n "$path" ] || return 2
+          case "$host" in :*) return 2 ;; esac
+          return 0
+          ;;
+        *) return 2 ;;
+      esac
+      ;;
+    file://*)
+      rest=${url#file://}
+      case "$rest" in
+        /*) [ -n "$rest" ] || return 2; return 0 ;;
+        */*)
+          authority=${rest%%/*}
+          path=${rest#*/}
+          [ -n "$authority" ] && [ -n "$path" ] || return 2
+          return 0
+          ;;
+        *) return 2 ;;
+      esac
+      ;;
+    *@*:*)
+      user=${url%%@*}
+      rest=${url#*@}
+      host=${rest%%:*}
+      path=${rest#*:}
+      [ -n "$user" ] && [ -n "$host" ] && [ -n "$path" ] || return 2
+      case "$user" in */*) return 1 ;; esac
+      case "$host" in */*) return 1 ;; esac
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 url_has_credentials() {  # <url>
   local url=${1:-} rest authority user
   case "$url" in
@@ -139,6 +185,19 @@ url_has_credentials() {  # <url>
 resolve_fork_url() {  # <dir>
   local dir=$1 origin owner declared config_status target remotes
   if declared=$(config_token fork-url); then
+    config_status=0
+    fork_url_validate "$declared" || config_status=$?
+    case "$config_status" in
+      0) ;;
+      1)
+        printf 'error: config/fork-url value %s is unusable: it must be an absolute remote URL or scp-like push URL\n' "$declared" >&2
+        return 3
+        ;;
+      *)
+        printf 'error: config/fork-url value %s is unusable: its URL must include a host and path\n' "$declared" >&2
+        return 3
+        ;;
+    esac
     printf '%s\n' "$declared"
     return 0
   else

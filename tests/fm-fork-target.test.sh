@@ -96,15 +96,52 @@ test_ssh_and_suffixless_origins_keep_their_spelling() {
 }
 
 test_declared_url_is_used_verbatim() {
-  local d out; d=$(new_case declared-url)
+  local d out url expected; d=$(new_case declared-url)
   make_fakebin "$d" >/dev/null
   set_origin "$d" https://user:token@evil.example/acme/widget.git
-  printf 'ssh://git@github.example/contributor/widget.git\n' > "$d/home/config/fork-url"
   printf 'other-account\n' > "$d/home/config/fork-owner"
-  out=$(resolve "$d")
-  assert_equals "ssh://git@github.example/contributor/widget.git" "$out" \
-    "a complete fork URL must be used verbatim"
-  pass "config/fork-url takes precedence and bypasses origin assembly"
+  while IFS='|' read -r url expected; do
+    printf '%s\n' "$url" > "$d/home/config/fork-url"
+    out=$(resolve "$d")
+    assert_equals "$expected" "$out" "a complete fork URL was rewritten: $url"
+  done <<EOF
+https://github.example/contributor/widget.git|https://github.example/contributor/widget.git
+ssh://git@github.example/contributor/widget.git|ssh://git@github.example/contributor/widget.git
+git+ssh://git@github.example/contributor/widget.git|git+ssh://git@github.example/contributor/widget.git
+git@github.example:contributor/widget.git|git@github.example:contributor/widget.git
+file://$d/bare.git|file://$d/bare.git
+EOF
+  pass "complete fork URLs are validated and passed through verbatim"
+}
+
+test_unusable_declared_url_is_refused_without_init() {
+  local d value reason status out err; d=$(new_case bad-url-shapes)
+  make_fakebin "$d" >/dev/null
+  set_origin "$d" https://github.com/acme/widget.git
+  while IFS='|' read -r value reason; do
+    printf '%s\n' "$value" > "$d/home/config/fork-url"
+    : > "$d/nm.log"
+    status=0
+    out=$(FM_TEST_NM_LOG="$d/nm.log" PATH="$d/fakebin:$PATH" FM_HOME="$d/home" \
+      "$FORK_TARGET" init "$d/repo" 2>"$d/err") || status=$?
+    expect_code 1 "$status" "an unusable fork URL must stop initialization: $value"
+    assert_equals "" "$out" "an unusable fork URL must produce no stdout: $value"
+    err=$(cat "$d/err")
+    assert_contains "$err" "$value" "the unusable value must be named: $value"
+    assert_contains "$err" "$reason" "the unusable value needs a concrete reason: $value"
+    assert_not_contains "$(cat "$d/nm.log")" "init" \
+      "an unusable fork URL must not invoke no-mistakes init: $value"
+  done <<'EOF'
+not-a-url|absolute remote URL or scp-like push URL
+github.com/acme/widget|absolute remote URL or scp-like push URL
+/tmp/upstream.git|absolute remote URL or scp-like push URL
+ftp://github.example/contributor/widget.git|absolute remote URL or scp-like push URL
+https://|host and path
+https:///widget.git|host and path
+https://github.example|host and path
+file://|host and path
+EOF
+  pass "unusable fork URLs fail closed before gate initialization"
 }
 
 test_no_declaration_resolves_to_origin() {
@@ -257,7 +294,7 @@ test_init_without_a_fork_target_initializes_against_origin() {
   pass "init falls back to the unchanged origin initialization"
 }
 
-test_unusable_declared_url_is_refused_without_init() {
+test_unusable_declared_url_directory_is_refused_without_init() {
   local d status err; d=$(new_case bad-url)
   make_fakebin "$d" >/dev/null
   set_origin "$d" https://github.com/acme/widget.git
@@ -313,6 +350,7 @@ test_declared_owner_wins
 test_declared_owner_matching_origin_resolves_to_nothing
 test_ssh_and_suffixless_origins_keep_their_spelling
 test_declared_url_is_used_verbatim
+test_unusable_declared_url_is_refused_without_init
 test_no_declaration_resolves_to_origin
 test_credential_bearing_origin_is_refused
 test_encoded_ssh_credential_origin_is_refused
@@ -324,6 +362,6 @@ test_surrounding_whitespace_is_allowed
 test_init_passes_the_resolved_target_through
 test_init_passes_a_complete_declared_url_verbatim
 test_init_without_a_fork_target_initializes_against_origin
-test_unusable_declared_url_is_refused_without_init
+test_unusable_declared_url_directory_is_refused_without_init
 test_declared_owner_does_not_rewrite_local_origin
 test_usage_error_exits_2
