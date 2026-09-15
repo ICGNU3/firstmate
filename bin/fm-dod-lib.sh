@@ -82,6 +82,7 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id>
 
 fm_no_mistakes_target_instruction() {  # <context> <quoted-home> <quoted-resolver>
   local context=$1 home_q=$2 resolver_q=$3
+  # shellcheck disable=SC2016  # The generated contract must retain literal shell syntax.
   printf 'Before %s, run `FM_HOME=%s %s init .` and capture its exit status. Status 0 means the target is ready and you may continue. Status 4 is advisory because no fork url is declared and the gate keeps its existing target: report the warning and continue. Any other non-zero status means stop and report the resolver or initialization error; do not start the gate.\n' \
     "$context" "$home_q" "$resolver_q"
 }

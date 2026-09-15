@@ -687,7 +687,8 @@ EOF
 }
 
 pending_no_mistakes_contains() {
-  local home=$1 project=$2 marker="$home/$PENDING_NO_MISTAKES_MARKER"
+  local home=$1 project=$2
+  local marker="$home/$PENDING_NO_MISTAKES_MARKER"
   [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
   grep -Fx -- "$project" "$marker" >/dev/null 2>&1
 }
@@ -719,7 +720,8 @@ pending_no_mistakes_write() {
 }
 
 pending_no_mistakes_remove() {
-  local home=$1 project=$2 marker="$home/$PENDING_NO_MISTAKES_MARKER" tmp
+  local home=$1 project=$2 tmp
+  local marker="$home/$PENDING_NO_MISTAKES_MARKER"
   [ -f "$marker" ] || return 0
   tmp="$marker.tmp.$$"
   grep -Fvx -- "$project" "$marker" > "$tmp" || true

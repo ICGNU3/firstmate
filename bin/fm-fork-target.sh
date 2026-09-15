@@ -197,7 +197,7 @@ fork_url_validate() {  # <url>
 }
 
 resolve_fork_url() {  # <dir>
-  local dir=$1 declared= config_status safe_declared reason
+  local dir=$1 declared='' config_status safe_declared reason
   if declared=$(config_token fork-url); then
     config_status=0
     fork_url_validate "$declared" || config_status=$?

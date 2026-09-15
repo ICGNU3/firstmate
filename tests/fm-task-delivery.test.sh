@@ -61,6 +61,7 @@ fill_brief_subsections() {  # <file> <intent> <spec>
 
 execute_generated_resolver_command() {  # <payload> <verb> <log>
   local payload=$1 verb=$2 log=$3 command
+  # shellcheck disable=SC2016  # The sed expressions must remain literal.
   case "$verb" in
     init) command=$(sed -n 's/.*run `\([^`]* init \.\)`.*/\1/p' "$payload" | head -1) ;;
     resolve) command=$(sed -n 's/.*run `\([^`]* resolve \.\)`.*/\1/p' "$payload" | head -1) ;;

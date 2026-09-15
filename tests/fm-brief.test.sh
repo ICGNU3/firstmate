@@ -518,6 +518,7 @@ EOF
       "$id" foreign --mode "$mode" >/dev/null 2>&1
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "$id: brief was not scaffolded"
+    # shellcheck disable=SC2016  # The sed expressions must remain literal.
     case "$verb" in
       init) command=$(sed -n 's/.*run `\([^`]* init \.\)`.*/\1/p' "$brief" | head -1) ;;
       resolve) command=$(sed -n 's/.*run `\([^`]* resolve \.\)`.*/\1/p' "$brief" | head -1) ;;
