@@ -290,7 +290,7 @@ validate_operational_dirs() {
 validate_seed_leaf_files() {
   local home=$1 label path abs_home abs_path
   abs_home=$(resolved_path "$home")
-  for label in "data/projects.md" "data/charter.md" "config/fork-owner" "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
+  for label in "data/projects.md" "data/charter.md" "config/fork-url" "config/fork-owner" "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
     path="$home/$label"
     if [ -L "$path" ]; then
       echo "error: secondmate leaf file must not be a symlink: $path" >&2
@@ -531,6 +531,7 @@ SEED_PARENT_BRIEF_CREATED=0
 SEED_PARENT_BRIEF_DIR_CREATED=0
 SEED_SUB_REG_EXISTED=0
 SEED_CHARTER_EXISTED=0
+SEED_FORK_URL_EXISTED=0
 SEED_FORK_OWNER_EXISTED=0
 SEED_MARKER_EXISTED=0
 SEED_PARENT_MARKER_EXISTED=0
@@ -656,6 +657,7 @@ seed_rollback() {
         restore_seed_file "$SEED_PARENT_MARKER_EXISTED" "$SEED_BACKUP_DIR/parent-marker" "$SEED_HOME/$SUB_HOME_PARENT_MARKER"
         restore_seed_file "$SEED_CHARTER_EXISTED" "$SEED_BACKUP_DIR/charter.md" "$SEED_HOME/data/charter.md"
         restore_seed_file "$SEED_SUB_REG_EXISTED" "$SEED_BACKUP_DIR/sub-projects.md" "$SEED_HOME/data/projects.md"
+        restore_seed_file "$SEED_FORK_URL_EXISTED" "$SEED_BACKUP_DIR/fork-url" "$SEED_HOME/config/fork-url"
         restore_seed_file "$SEED_FORK_OWNER_EXISTED" "$SEED_BACKUP_DIR/fork-owner" "$SEED_HOME/config/fork-owner"
       fi
     fi
@@ -727,19 +729,21 @@ initialize_no_mistakes_project() {
     echo "error: no-mistakes command not found; cannot initialize $project in $home" >&2
     return 1
   }
-  if ! FM_INHERITABLE_CONFIG=fork-owner \
+  if ! FM_INHERITABLE_CONFIG='fork-url fork-owner' \
     propagate_inheritable_config "$CONFIG" "$home/config"; then
-    echo "error: failed to inherit fork-owner before initializing $project in $home" >&2
+    echo "error: failed to inherit fork target configuration before initializing $project in $home" >&2
     return 1
   fi
-  if [ -f "$CONFIG/fork-owner" ] && ! cmp -s "$CONFIG/fork-owner" "$home/config/fork-owner"; then
-    echo "error: fork-owner was not inherited before initializing $project in $home" >&2
-    return 1
-  fi
-  if [ ! -e "$CONFIG/fork-owner" ] && [ -e "$home/config/fork-owner" ]; then
-    echo "error: stale fork-owner remained before initializing $project in $home" >&2
-    return 1
-  fi
+  for target_config in fork-url fork-owner; do
+    if [ -f "$CONFIG/$target_config" ] && ! cmp -s "$CONFIG/$target_config" "$home/config/$target_config"; then
+      echo "error: $target_config was not inherited before initializing $project in $home" >&2
+      return 1
+    fi
+    if [ ! -e "$CONFIG/$target_config" ] && [ -e "$home/config/$target_config" ]; then
+      echo "error: stale $target_config remained before initializing $project in $home" >&2
+      return 1
+    fi
+  done
   FM_HOME="$home" "$SCRIPT_DIR/fm-fork-target.sh" init "$dst" >/dev/null || {
     echo "error: failed to initialize no-mistakes for $project at $dst" >&2
     return 1
@@ -869,6 +873,7 @@ seed_home() {
   SEED_SUB_REG_EXISTED=0
   SEED_CHARTER_EXISTED=0
   SEED_FORK_OWNER_EXISTED=0
+  SEED_FORK_URL_EXISTED=0
   SEED_MARKER_EXISTED=0
   if [ -f "$REG" ]; then
     SEED_PARENT_REG_EXISTED=1
@@ -912,6 +917,10 @@ seed_home() {
   if [ -f "$home/config/fork-owner" ]; then
     SEED_FORK_OWNER_EXISTED=1
     cp "$home/config/fork-owner" "$SEED_BACKUP_DIR/fork-owner"
+  fi
+  if [ -f "$home/config/fork-url" ]; then
+    SEED_FORK_URL_EXISTED=1
+    cp "$home/config/fork-url" "$SEED_BACKUP_DIR/fork-url"
   fi
   if [ -f "$home/$SUB_HOME_MARKER" ]; then
     SEED_MARKER_EXISTED=1

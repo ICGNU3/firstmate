@@ -442,7 +442,7 @@ case "$MODE" in
     ;;
   *)  # no-mistakes
     SETUP2="
-2. Before starting no-mistakes, run \`FM_HOME=$FM_HOME_Q $FM_ROOT/bin/fm-fork-target.sh init .\` - it refreshes the gate against the push target this home can actually write, including when the gate was already initialized."
+2. Before starting no-mistakes, run \`FM_HOME=$FM_HOME_Q $FM_ROOT/bin/fm-fork-target.sh init .\`; if it exits non-zero, stop and report the resolver or initialization error instead of starting the gate. It refreshes the gate against the push target this home can actually write, including when the gate was already initialized."
     ;;
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID") || exit 1

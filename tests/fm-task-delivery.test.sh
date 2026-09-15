@@ -373,6 +373,8 @@ STUB
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-no-mistakes"
   assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh init ." "$payload" \
     "promoted no-mistakes worker did not receive the effective home for target initialization"
+  assert_grep "if it exits non-zero, stop and report" "$payload" \
+    "promoted no-mistakes worker must stop when target initialization fails"
   assert_grep "ask-user findings are never yours to answer: escalate to firstmate" "$payload" \
     "promoted no-mistakes worker did not receive the ask-user escalation rule"
   assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$payload" \
@@ -387,6 +389,8 @@ STUB
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-direct-pr"
   assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh resolve ." "$payload" \
     "promoted direct-PR worker did not receive the effective home for target resolution"
+  assert_grep "check its exit status" "$payload" \
+    "promoted direct-PR worker must distinguish resolver failure from empty output"
   assert_grep "supersede the scout delivery rules and report-based Definition of done" "$payload" \
     "promoted worker retained the scout delivery contract"
   assert_grep "status protocol; the instruction inbox and its acknowledgement; the escalation rules, including ask-user; and every safety rule" "$payload" \

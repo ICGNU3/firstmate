@@ -18,19 +18,17 @@
 #   fm-fork-target.sh init <dir>      run `no-mistakes init` against the
 #                                     resolved target, then `no-mistakes doctor`
 #
-# Resolution order, first hit wins, always derived from <dir>'s own `origin`
-# url so the fork tracks the repo actually cloned here:
-#   1. config/fork-owner - the forge account this home owns its forks under.
-#      An operator declaration is taken as given and never probed; it applies to
-#      every project in the home, and is inherited by secondmate homes.
-#   2. The authenticated `gh` account, when it differs from origin's owner AND
-#      `gh repo view` proves that account already holds a fork of this repo.
-#      A target is never guessed into existence: an account with no fork
-#      resolves to nothing rather than to a url whose push would 404.
+# Resolution uses only local declarations and the clone's own `origin`:
+#   1. config/fork-url - a complete push url used verbatim. It takes precedence
+#      over every other setting and is inherited by secondmate homes.
+#   2. config/fork-owner - the forge account this home owns its forks under.
+#      It applies to every project in the home and is inherited by secondmate
+#      homes; the target is assembled from that clone's origin.
 #   3. Nothing - the maintainer shape, where origin itself is writable. The
 #      gate is then initialized exactly as it was before this script existed.
-# Every step is read-only. A missing `gh` resolves to no fork target; an
-# unreadable or unparseable input reports an incomplete resolution.
+# A configured and usable target is printed with exit 0. No declaration prints
+# nothing with exit 0. An unusable declaration or internal error prints nothing
+# on stdout, names the problem on stderr, and exits non-zero.
 #
 # `no-mistakes init` refreshes an existing registration, so `init` is also the
 # repair path for a home whose gate was already initialized against an
@@ -67,16 +65,6 @@ url_owner() {  # <url>
   owner=${rest##*[:/]}
   [ -n "$owner" ] || return 1
   printf '%s' "$owner"
-}
-
-# Repository segment of a remote url, without any `.git` suffix.
-url_repo() {  # <url>
-  local url=${1:-} repo
-  url=${url%/}
-  repo=${url##*/}
-  repo=${repo%.git}
-  [ -n "$repo" ] || return 1
-  printf '%s' "$repo"
 }
 
 url_is_forge_remote() {  # <url>
@@ -148,62 +136,18 @@ url_has_credentials() {  # <url>
   return 1
 }
 
-url_host() {  # <url>
-  local url=${1:-} rest authority host
-  case "$url" in
-    https://*|http://*|ssh://*|git://*)
-      rest=${url#*://}
-      authority=${rest%%/*}
-      [ "$authority" != "$rest" ] || return 1
-      authority=${authority##*@}
-      case "$authority" in
-        \[*\]*) host=${authority%%]*}; host=${host#\[} ;;
-        *:*) host=${authority%%:*} ;;
-        *) host=$authority ;;
-      esac
-      ;;
-    *://*) return 1 ;;
-    *@*:*|[A-Za-z0-9._-]*:*)
-      rest=${url#*@}
-      host=${rest%%:*}
-      ;;
-    *) return 1 ;;
-  esac
-  [ -n "$host" ] || return 1
-  printf '%s' "$host"
-}
-
-# The account `gh` is authenticated as, or nothing. Read-only.
-gh_login() {
-  local login
-  command -v gh >/dev/null 2>&1 || return 1
-  login=$(gh api user -q .login 2>/dev/null) || return 2
-  login=$(printf '%s' "$login" | tr -d '[:space:]')
-  [ -n "$login" ] || return 2
-  printf '%s' "$login"
-}
-
-gh_fork_exists() {  # <account> <repo> <parent-owner> <parent-repo>
-  local metadata expected status detail
-  command -v gh >/dev/null 2>&1 || return 2
-  metadata=$(gh repo view "$1/$2" --json isFork,parent \
-    --jq '[.isFork, (.parent.nameWithOwner // "")] | @tsv' 2>&1)
-  status=$?
-  if [ "$status" -ne 0 ]; then
-    detail=$(printf '%s' "$metadata" | tr '[:upper:]' '[:lower:]')
-    case "$detail" in
-      *404*|*"not found"*|*"could not resolve to a repository"*) return 1 ;;
-      *) return 2 ;;
-    esac
-  fi
-  metadata=$(printf '%s' "$metadata" | tr '[:upper:]' '[:lower:]')
-  expected=$(printf 'true\t%s/%s' "$3" "$4" | tr '[:upper:]' '[:lower:]')
-  [ "$metadata" = "$expected" ] && return 0
-  return 1
-}
-
 resolve_fork_url() {  # <dir>
-  local dir=$1 origin owner repo declared login config_status host login_status fork_status target remotes
+  local dir=$1 origin owner declared config_status target remotes
+  if declared=$(config_token fork-url); then
+    printf '%s\n' "$declared"
+    return 0
+  else
+    config_status=$?
+    if [ "$config_status" -ne 1 ]; then
+      printf 'error: config/fork-url must contain exactly one nonempty complete push url\n' >&2
+      return 3
+    fi
+  fi
   if ! origin=$(git -C "$dir" remote get-url origin 2>/dev/null); then
     remotes=$(git -C "$dir" remote 2>/dev/null) || {
       printf 'error: could not read remotes for %s\n' "$dir" >&2
@@ -246,57 +190,7 @@ resolve_fork_url() {  # <dir>
     fi
   fi
 
-  url_is_forge_remote "$origin" || return 1
-  owner=$(url_owner "$origin") || {
-    printf 'error: could not parse the forge origin for %s\n' "$dir" >&2
-    return 2
-  }
-  repo=$(url_repo "$origin") || {
-    printf 'error: could not parse the forge repository for %s\n' "$dir" >&2
-    return 2
-  }
-
-  # `gh` speaks only to GitHub, so an origin that does not name a GitHub host
-  # has no account this credential could own a fork under. Declared
-  # config/fork-owner above stays host-agnostic; only this derived path is
-  # gated, which also keeps a local or non-forge origin from reaching the api.
-  host=$(url_host "$origin") || {
-    printf 'error: could not parse the forge host for %s\n' "$dir" >&2
-    return 2
-  }
-  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
-  [ "$host" = github.com ] || return 1
-  login_status=0
-  login=$(gh_login) || login_status=$?
-  case "$login_status" in
-    1) return 1 ;;
-    2)
-      printf 'error: could not determine the authenticated GitHub account for %s\n' "$origin" >&2
-      return 2
-      ;;
-  esac
-  if ! account_safe "$login"; then
-    printf 'error: authenticated GitHub account is not usable for %s\n' "$origin" >&2
-    return 2
-  fi
-  [ "$login" != "$owner" ] || return 1
-  fork_status=0
-  gh_fork_exists "$login" "$repo" "$owner" "$repo" || fork_status=$?
-  case "$fork_status" in
-    0)
-      target=$(url_swap_owner "$origin" "$login") || {
-        printf 'error: could not construct the fork target for %s\n' "$dir" >&2
-        return 2
-      }
-      printf '%s\n' "$target"
-      return 0
-      ;;
-    1) return 1 ;;
-    *)
-      printf 'error: could not verify fork target %s/%s for %s\n' "$login" "$repo" "$origin" >&2
-      return 2
-      ;;
-  esac
+  return 1
 }
 
 cmd_resolve() {  # <dir>
@@ -333,7 +227,7 @@ cmd_init() {  # <dir>
       printf 'fork target: origin (no fork configured or resolvable for this home)\n'
       ( cd "$dir" && no-mistakes init ) || die "no-mistakes init failed for $dir"
       ;;
-    2)
+    2|3)
       if has_existing_fork_registration "$dir"; then
         printf 'error: fork-target resolution incomplete; preserving existing no-mistakes registration\n' >&2
       else

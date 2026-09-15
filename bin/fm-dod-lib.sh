@@ -268,7 +268,7 @@ Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
-Before pushing, run \`FM_HOME=$home_q $FM_DOD_ROOT/bin/fm-fork-target.sh resolve .\`: if it prints a url, this home cannot push to \`origin\`, so push your branch to that fork and open the PR against \`origin\` from it; if it prints nothing, push to \`origin\` as usual.
+Before pushing, run \`FM_HOME=$home_q $FM_DOD_ROOT/bin/fm-fork-target.sh resolve .\` and check its exit status. If it exits non-zero, stop and report the resolver error instead of pushing; if it succeeds with a url, this home cannot push to \`origin\`, so push your branch to that fork and open the PR against \`origin\` from it; if it succeeds with no output, push to \`origin\` as usual.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
       ;;
@@ -291,7 +291,7 @@ The task is complete only when committed on your branch.
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 
-Before starting /no-mistakes, run \`FM_HOME=$home_q $FM_DOD_ROOT/bin/fm-fork-target.sh init .\` to refresh the gate against the push target this home can actually write, including when the gate was already initialized.
+Before starting /no-mistakes, run \`FM_HOME=$home_q $FM_DOD_ROOT/bin/fm-fork-target.sh init .\`; if it exits non-zero, stop and report the resolver or initialization error instead of starting the gate. It refreshes the gate against the push target this home can actually write, including when the gate was already initialized.
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.

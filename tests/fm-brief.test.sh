@@ -217,9 +217,13 @@ test_ship_modes_generate_clean_briefs() {
     if [ "$mode" = no-mistakes ]; then
       assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh init ." "$brief" \
         "$id: no-mistakes brief must refresh the push target before starting the gate"
+      assert_grep "if it exits non-zero, stop and report" "$brief" \
+        "$id: no-mistakes brief must stop when target initialization fails"
     elif [ "$mode" = direct-PR ]; then
       assert_grep "FM_HOME=$home_q $ROOT/bin/fm-fork-target.sh resolve ." "$brief" \
         "$id: direct-PR brief must resolve the push target from its effective home"
+      assert_grep "check its exit status" "$brief" \
+        "$id: direct-PR brief must distinguish resolver failure from empty output"
     fi
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \

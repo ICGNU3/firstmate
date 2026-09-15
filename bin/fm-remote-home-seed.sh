@@ -157,6 +157,14 @@ if [ "$FORK_OWNER_PRESENT" = 1 ]; then
     || die "config/fork-owner is not a regular file"
   FORK_OWNER_B64=$(encode < "$CONFIG/fork-owner")
 fi
+FORK_URL_PRESENT=$(fm_config_source_present "$CONFIG/fork-url") \
+  || die "cannot inspect config/fork-url"
+FORK_URL_B64=
+if [ "$FORK_URL_PRESENT" = 1 ]; then
+  [ -f "$CONFIG/fork-url" ] && [ ! -L "$CONFIG/fork-url" ] \
+    || die "config/fork-url is not a regular file"
+  FORK_URL_B64=$(encode < "$CONFIG/fork-url")
+fi
 
 # Keep the parent charter as its durable source, but publish a remote copy whose
 # status path is the remote append-only relay log rather than a local Mac path.
@@ -215,6 +223,10 @@ done
   if [ "$FORK_OWNER_PRESENT" = 1 ]; then
     printf 'fork_owner_present=1\n'
     printf 'fork_owner_b64=%s\n' "$FORK_OWNER_B64"
+  fi
+  if [ "$FORK_URL_PRESENT" = 1 ]; then
+    printf 'fork_url_present=1\n'
+    printf 'fork_url_b64=%s\n' "$FORK_URL_B64"
   fi
   printf 'project_count=%s\n' "${#PROJECT_NAMES[@]}"
   cat "$TMP/project.records"

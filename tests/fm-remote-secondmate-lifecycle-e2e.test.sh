@@ -272,6 +272,29 @@ manifest_for_owner() { # <file> <id> <absent|empty|value>
   } > "$file"
 }
 
+manifest_for_url() { # <file> <id> <absent|empty|value>
+  local file=$1 id=$2 kind=$3 url_b64=
+  case "$kind" in
+    value) url_b64=$(printf 'ssh://git@github.example/contributor/widget.git\n' | base64 | tr -d '\n') ;;
+  esac
+  {
+    printf 'schema=fm-remote-home-provision.v1\n'
+    printf 'id_b64=%s\n' "$(printf '%s' "$id" | base64 | tr -d '\n')"
+    printf 'charter_b64=%s\n' "$(printf 'URL manifest charter.\n' | base64 | tr -d '\n')"
+    case "$kind" in
+      empty)
+        printf 'fork_url_present=1\n'
+        printf 'fork_url_b64=\n'
+        ;;
+      value)
+        printf 'fork_url_present=1\n'
+        printf 'fork_url_b64=%s\n' "$url_b64"
+        ;;
+    esac
+    printf 'project_count=0\n'
+  } > "$file"
+}
+
 publish_healthy_watcher_identity() { # <state> <home> <watch-script>
   local state=$1 home=$2 watch=$3 identity
   identity=$(FM_HOME="$PARENT" FM_STATE_OVERRIDE="$PARENT/state" /bin/bash -c \
@@ -398,6 +421,12 @@ fi
 if grep -q '^fork_owner_b64=' "$manifest_capture"; then
   fail "an absent fork-owner setting was encoded with an empty payload"
 fi
+if grep -q '^fork_url_present=' "$manifest_capture"; then
+  fail "an absent fork-url setting was encoded as present"
+fi
+if grep -q '^fork_url_b64=' "$manifest_capture"; then
+  fail "an absent fork-url setting was encoded with an empty payload"
+fi
 
 : > "$TMP_ROOT/seed-parent/config/fork-owner"
 manifest_capture="$TMP_ROOT/manifest-empty"
@@ -422,7 +451,32 @@ grep -qx 'fork_owner_present=1' "$manifest_capture" \
   || fail "a valued fork-owner setting did not carry its presence marker"
 grep -qx "fork_owner_b64=$(printf 'contributor\n' | base64 | tr -d '\n')" "$manifest_capture" \
   || fail "a valued fork-owner setting did not carry its payload"
-pass "remote seeding preserves absent, empty, and valued fork-owner manifest states"
+
+rm -f "$TMP_ROOT/seed-parent/config/fork-owner"
+: > "$TMP_ROOT/seed-parent/config/fork-url"
+manifest_capture="$TMP_ROOT/manifest-url-empty"
+FM_FAKE_PROVISION_MANIFEST="$manifest_capture" \
+  FM_SECONDMATE_CHARTER='Manifest capture charter.' FM_SECONDMATE_SCOPE='manifest capture' \
+  seed_env "$ROOT/bin/fm-remote-home-seed.sh" manifest-url-empty remote-mac "$REMOTE_ROOT" \
+  "$TMP_ROOT/manifest-url-empty-home" --no-projects >/dev/null 2>&1 \
+  || fail "seeding with an empty fork-url should capture a manifest"
+grep -qx 'fork_url_present=1' "$manifest_capture" \
+  || fail "an empty fork-url setting did not carry its presence marker"
+grep -qx 'fork_url_b64=' "$manifest_capture" \
+  || fail "an empty fork-url setting did not carry an empty payload"
+
+printf 'ssh://git@github.example/contributor/widget.git\n' > "$TMP_ROOT/seed-parent/config/fork-url"
+manifest_capture="$TMP_ROOT/manifest-url-value"
+FM_FAKE_PROVISION_MANIFEST="$manifest_capture" \
+  FM_SECONDMATE_CHARTER='Manifest capture charter.' FM_SECONDMATE_SCOPE='manifest capture' \
+  seed_env "$ROOT/bin/fm-remote-home-seed.sh" manifest-url-value remote-mac "$REMOTE_ROOT" \
+  "$TMP_ROOT/manifest-url-value-home" --no-projects >/dev/null 2>&1 \
+  || fail "seeding with a fork-url should capture a manifest"
+grep -qx 'fork_url_present=1' "$manifest_capture" \
+  || fail "a valued fork-url setting did not carry its presence marker"
+grep -qx "fork_url_b64=$(printf 'ssh://git@github.example/contributor/widget.git\n' | base64 | tr -d '\n')" "$manifest_capture" \
+  || fail "a valued fork-url setting did not carry its payload"
+pass "remote seeding preserves absent, empty, and valued target declarations"
 
 manifest_for_owner "$TMP_ROOT/owner-value.manifest" owner-value value
 FM_HOME="$TMP_ROOT/owner-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
@@ -463,6 +517,46 @@ fi
 [ "$(cat "$TMP_ROOT/owner-value-home/config/fork-owner")" = contributor ] \
   || fail "an undecodable fork-owner payload erased an existing setting"
 pass "remote provisioning preserves absent, empty, valued, and undecodable fork-owner states"
+
+manifest_for_url "$TMP_ROOT/url-value.manifest" url-value value
+FM_HOME="$TMP_ROOT/url-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/url-value.manifest" \
+  > "$TMP_ROOT/url-value.out" 2>&1 \
+  || fail "remote provisioning rejected a valued fork-url manifest"
+[ "$(cat "$TMP_ROOT/url-value-home/config/fork-url")" = 'ssh://git@github.example/contributor/widget.git' ] \
+  || fail "remote provisioning did not materialize the valued fork-url"
+
+manifest_for_url "$TMP_ROOT/url-empty.manifest" url-empty empty
+FM_HOME="$TMP_ROOT/url-empty-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/url-empty.manifest" \
+  > "$TMP_ROOT/url-empty.out" 2>&1 \
+  || fail "remote provisioning rejected an empty fork-url manifest"
+[ -f "$TMP_ROOT/url-empty-home/config/fork-url" ] \
+  || fail "an empty fork-url manifest did not materialize a present file"
+[ ! -s "$TMP_ROOT/url-empty-home/config/fork-url" ] \
+  || fail "an empty fork-url manifest materialized nonempty content"
+
+manifest_for_url "$TMP_ROOT/url-absent.manifest" url-value absent
+FM_HOME="$TMP_ROOT/url-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/url-absent.manifest" \
+  > "$TMP_ROOT/url-absent.out" 2>&1 \
+  || fail "remote provisioning rejected an absent fork-url manifest"
+[ "$(cat "$TMP_ROOT/url-value-home/config/fork-url")" = 'ssh://git@github.example/contributor/widget.git' ] \
+  || fail "an absent fork-url manifest erased an existing setting"
+
+printf '%s\n' 'schema=fm-remote-home-provision.v1' \
+  'id_b64=dXJsLXZhbHVl' \
+  'charter_b64=VVJMIG1hbmlmZXN0IGNoYXJ0ZXIuCg==' \
+  'fork_url_present=1' 'fork_url_b64=%%%' 'project_count=0' \
+  > "$TMP_ROOT/url-invalid.manifest"
+if FM_HOME="$TMP_ROOT/url-value-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/url-invalid.manifest" \
+  > "$TMP_ROOT/url-invalid.out" 2>&1; then
+  fail "remote provisioning accepted an undecodable fork-url payload"
+fi
+[ "$(cat "$TMP_ROOT/url-value-home/config/fork-url")" = 'ssh://git@github.example/contributor/widget.git' ] \
+  || fail "an undecodable fork-url payload erased an existing setting"
+pass "remote provisioning preserves target declaration states"
 if [ "${FM_TEST_PROVISION_ONLY:-0}" = 1 ]; then
   echo "ALL TESTS PASSED"
   exit 0
