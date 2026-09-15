@@ -97,6 +97,7 @@ run_spawn() {
     FM_FAKE_LAUNCH_LOG="$launchlog" FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
     FM_FAKE_CURSOR_LIST_STATUS="${FM_TEST_CURSOR_LIST_STATUS:-0}" \
+    FM_FAKE_NO_MISTAKES_INIT_STATUS="${FM_TEST_NO_MISTAKES_INIT_STATUS:-0}" \
     GROK_HOME="$home/grok-home" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" "$@"
 }
@@ -119,6 +120,32 @@ test_ship_spawn_refreshes_the_push_target_before_launch() {
   assert_present "$PROJ_DIR/.no-mistakes-init" "ship spawn did not initialize the no-mistakes target"
   assert_present "$PROJ_DIR/.no-mistakes-doctor" "ship spawn did not doctor the refreshed target"
   pass "ship spawn refreshes an existing no-mistakes registration before launch"
+}
+
+test_ship_spawn_discriminates_push_target_init_status() {
+  local rec id out status
+
+  id=profile-advisory-target-z1f
+  rec=$(make_spawn_case profile-advisory-target claude "$id")
+  read_case_record "$rec"
+  rm -f "$HOME_DIR/config/fork-url"
+  out=$(FM_TEST_NO_MISTAKES_INIT_STATUS=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "an advisory push-target initialization failure must still launch"
+  assert_contains "$out" "no fork url is declared" "the advisory push-target failure must be reported"
+  [ -s "$LAUNCH_LOG" ] || fail "an advisory push-target failure must not suppress the launch"
+
+  id=profile-fatal-target-z1g
+  rec=$(make_spawn_case profile-fatal-target claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' 'ssh://github.example/contributor/widget.git' > "$HOME_DIR/config/fork-url"
+  out=$(FM_TEST_NO_MISTAKES_INIT_STATUS=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 1 "$status" "a declared push-target initialization failure must stop the spawn"
+  assert_contains "$out" "could not refresh no-mistakes push target" \
+    "a fatal push-target failure must be reported"
+  [ ! -s "$LAUNCH_LOG" ] || fail "a fatal push-target failure must suppress the launch"
+  pass "fm-spawn discriminates successful, advisory, and fatal target initialization"
 }
 
 read_case_record() {
@@ -1387,6 +1414,7 @@ test_non_claude_harness_ignores_claude_permission_mode() {
 
 test_worker_launch_delivers_role_scope
 test_ship_spawn_refreshes_the_push_target_before_launch
+test_ship_spawn_discriminates_push_target_init_status
 test_no_profile_keeps_claude_profile_defaults
 test_non_cursor_launch_clears_inherited_cursor_markers
 test_relative_home_overrides_launch_with_absolute_cross_process_paths

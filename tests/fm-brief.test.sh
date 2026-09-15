@@ -189,18 +189,13 @@ write_registry() {
 EOF
 }
 
-# The generated Definition of done is the public contract delivered to a worker.
-extract_definition_of_done() {
-  sed -n '/^# Definition of done$/,$p' "$1"
-}
-
 # fm-brief.sh must exit 0 and produce a brief with no unreplaced shell
 # metacharacter corruption for every ship delivery mode. This also guards
 # against any *new* unescaped apostrophe or unbalanced quote later added to
 # one of these DOD blocks, since a broken heredoc corrupts or empties the
 # generated brief content, not just the script's own syntax.
 test_ship_modes_generate_clean_briefs() {
-  local home id mode brief status home_q dod
+  local home id mode brief status home_q
   home="$TMP_ROOT/ship-home"
   write_registry "$home"
   home_q=$(printf '%q' "$home")
@@ -219,14 +214,6 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{FIRSTMATE_SPEC}" "$brief" "$id: brief missing the {FIRSTMATE_SPEC} placeholder"
     assert_grep "## Captain's intent" "$brief" "$id: brief missing Captain's intent subsection"
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
-    dod="$TMP_ROOT/$id-dod.md"
-    extract_definition_of_done "$brief" > "$dod"
-    if [ "$mode" = no-mistakes ]; then
-      assert_grep "Status 4 is advisory because no fork url is declared" "$dod" \
-        "$id: no-mistakes contract must continue after the advisory target status"
-      assert_grep "Any other non-zero status means stop and report" "$dod" \
-        "$id: no-mistakes contract must stop after a non-advisory target failure"
-    fi
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
@@ -353,12 +340,6 @@ test_no_mistakes_dod_wording() {
   assert_grep '[captain]' "$brief" "rendered intent contract must explain the neutral legacy provenance marker"
   assert_grep "no-mistakes itself provides for the mechanics" "$brief" \
     "no-mistakes DOD lost its guidance-reference sentence"
-  dod="$TMP_ROOT/wording-dod.md"
-  extract_definition_of_done "$brief" > "$dod"
-  assert_grep "Status 4 is advisory because no fork url is declared" "$dod" \
-    "no-mistakes DOD must continue after an advisory target failure"
-  assert_grep "Any other non-zero status means stop and report" "$dod" \
-    "no-mistakes DOD must stop after a non-advisory target failure"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep '`no-mistakes axi run --help`' "$brief" \
     "no-mistakes DOD must render literal backticks around the help command"

@@ -59,10 +59,6 @@ fill_brief_subsections() {  # <file> <intent> <spec>
   printf '%s\n' "$content" > "$file"
 }
 
-extract_definition_of_done() {
-  sed -n '/^# Definition of done$/,$p' "$1"
-}
-
 execute_generated_resolver_command() {  # <payload> <verb> <log>
   local payload=$1 verb=$2 log=$3 command
   case "$verb" in
@@ -407,12 +403,6 @@ STUB
   done
 
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-no-mistakes"
-  dod="$TMP_ROOT/promote-dod/promoted-no-mistakes-dod"
-  extract_definition_of_done "$payload" > "$dod"
-  assert_grep "Status 4 is advisory because no fork url is declared" "$dod" \
-    "promoted no-mistakes worker must continue after the advisory target status"
-  assert_grep "Any other non-zero status means stop and report" "$dod" \
-    "promoted no-mistakes worker must stop after a non-advisory target failure"
   assert_grep "ask-user findings are never yours to answer: escalate to firstmate" "$payload" \
     "promoted no-mistakes worker did not receive the ask-user escalation rule"
   assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$payload" \
@@ -425,8 +415,6 @@ STUB
     "promoted no-mistakes worker did not receive the fleet-wide ban wording"
 
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-direct-pr"
-  dod="$TMP_ROOT/promote-dod/promoted-direct-pr-dod"
-  extract_definition_of_done "$payload" > "$dod"
   assert_grep "supersede the scout delivery rules and report-based Definition of done" "$payload" \
     "promoted worker retained the scout delivery contract"
   assert_grep "status protocol; the instruction inbox and its acknowledgement; the escalation rules, including ask-user; and every safety rule" "$payload" \
