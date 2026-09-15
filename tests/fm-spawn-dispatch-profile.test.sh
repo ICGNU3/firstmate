@@ -1173,10 +1173,9 @@ run_launch_environment_inheritance() {
 }
 
 test_launch_environment_inheritance_preserves_on_source_errors() {
-  local route rec id dest out status
+  local route rec id dest out status real_config
   if [ "$(id -u)" = 0 ]; then
     printf '# skip - inaccessible inheritance sources require a non-root user\n'
-    return
   fi
   for route in local remote; do
     id="env-inherit-$route"
@@ -1209,14 +1208,16 @@ SH
     [ "$(cat "$dest/config/launch-env-allowlist")" = FM_TEST_ALLOWED ] \
       || fail "$route inheritance did not publish the allowlist"
 
-    chmod 600 "$HOME_DIR/config" || fail "could not remove source search permission"
-    out=$(run_launch_environment_inheritance "$route" "$HOME_DIR" "$dest" "$FAKEBIN_DIR" 2 2>&1)
-    status=$?
-    chmod 700 "$HOME_DIR/config" || fail "could not restore source search permission"
-    expect_code 1 "$status" "$route inheritance must refuse an inaccessible source: $out"
-    assert_contains "$out" launch-env-allowlist "$route inspection error must identify the allowlist"
-    [ "$(cat "$dest/config/launch-env-allowlist")" = FM_TEST_ALLOWED ] \
-      || fail "$route inheritance removed or changed the allowlist after an inspection error"
+    if [ "$(id -u)" -ne 0 ]; then
+      chmod 600 "$HOME_DIR/config" || fail "could not remove source search permission"
+      out=$(run_launch_environment_inheritance "$route" "$HOME_DIR" "$dest" "$FAKEBIN_DIR" 2 2>&1)
+      status=$?
+      chmod 700 "$HOME_DIR/config" || fail "could not restore source search permission"
+      expect_code 1 "$status" "$route inheritance must refuse an inaccessible source: $out"
+      assert_contains "$out" launch-env-allowlist "$route inspection error must identify the allowlist"
+      [ "$(cat "$dest/config/launch-env-allowlist")" = FM_TEST_ALLOWED ] \
+        || fail "$route inheritance removed or changed the allowlist after an inspection error"
+    fi
 
     rm "$HOME_DIR/config/launch-env-allowlist"
     ln -s missing-allowlist "$HOME_DIR/config/launch-env-allowlist"
@@ -1225,6 +1226,23 @@ SH
     expect_code 1 "$status" "$route inheritance must refuse a dangling source link: $out"
     [ "$(cat "$dest/config/launch-env-allowlist")" = FM_TEST_ALLOWED ] \
       || fail "$route inheritance treated a dangling source link as absence"
+
+    rm "$HOME_DIR/config/launch-env-allowlist"
+    real_config="$CASE_DIR/real-config-$route"
+    mv "$HOME_DIR/config" "$real_config"
+    ln -s "$real_config" "$HOME_DIR/config"
+    printf 'FM_TEST_ALLOWED\n' > "$real_config/launch-env-allowlist"
+    out=$(run_launch_environment_inheritance "$route" "$HOME_DIR" "$dest" "$FAKEBIN_DIR" 4 2>&1)
+    status=$?
+    rm "$HOME_DIR/config"
+    mv "$real_config" "$HOME_DIR/config"
+    expect_code 1 "$status" "$route inheritance must refuse a symlinked source config directory: $out"
+    if [ "$route" = remote ]; then
+      assert_contains "$out" "source config directory is a symlink" \
+        "remote inheritance must identify the symlinked source config directory"
+    fi
+    [ "$(cat "$dest/config/launch-env-allowlist")" = FM_TEST_ALLOWED ] \
+      || fail "$route inheritance changed the destination after a symlinked source config directory"
 
     rm "$HOME_DIR/config/launch-env-allowlist"
     out=$(run_launch_environment_inheritance "$route" "$HOME_DIR" "$dest" "$FAKEBIN_DIR" 4 2>&1)

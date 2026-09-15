@@ -466,6 +466,50 @@ steps[9]{step,status,findings,duration_ms}:
 EOF
 }
 
+run_failed_ci_orphan_truncated() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: failed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/203"
+  findings: none
+outcome: failed
+steps[9]{step,status,findings,duration_ms}:
+  review,completed,0,0
+  test,completed,0,0
+  document,completed,0,0
+  lint,completed,0,0
+  push,completed,0,0
+  pr,completed,0,0
+  ci,failed,0,76127890
+EOF
+}
+
+run_failed_ci_orphan_duplicate_step() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: failed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/203"
+  findings: none
+outcome: failed
+steps[9]{step,status,findings,duration_ms}:
+  intent,completed,0,0
+  rebase,completed,0,0
+  review,completed,0,0
+  review,completed,0,0
+  test,completed,0,0
+  document,completed,0,0
+  lint,completed,0,0
+  push,completed,0,0
+  ci,failed,0,76127890
+EOF
+}
+
 # The 2026-09-13 delivery-failure shape: every validation step completed, the
 # push to the target remote was rejected, and the steps that would have
 # delivered the branch never started.
@@ -1108,6 +1152,36 @@ daemon shutting down"
   assert_contains "$out" "state: done" "status-only failed orphaned monitor after green reads done"
   assert_contains "$out" "https://github.com/o/r/pull/203" "PR URL surfaced from the run"
   pass "status-only failed orphaned ci monitor after green reads done"
+}
+
+test_terminal_failed_ci_orphan_truncated_stays_failed() {
+  reset_fakes
+  local d; d=$(new_case failed-ci-orphan-truncated)
+  make_repo_on_branch "$d/wt" fm/feat-ci-orphan-truncated
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ci-orphan-truncated.meta" "window=fm:fm-feat-ci-orphan-truncated" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan_truncated fm/feat-ci-orphan-truncated)"
+  FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed
+daemon shutting down"
+  local out; out=$(run_crew_state "$d" feat-ci-orphan-truncated)
+  assert_contains "$out" "state: failed" "truncated orphaned ci evidence must stay failed"
+  assert_not_contains "$out" "state: done" "truncated orphaned ci evidence must not reclassify"
+  pass "truncated orphaned ci evidence stays failed"
+}
+
+test_terminal_failed_ci_orphan_duplicate_step_stays_failed() {
+  reset_fakes
+  local d; d=$(new_case failed-ci-orphan-duplicate)
+  make_repo_on_branch "$d/wt" fm/feat-ci-orphan-duplicate
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ci-orphan-duplicate.meta" "window=fm:fm-feat-ci-orphan-duplicate" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan_duplicate_step fm/feat-ci-orphan-duplicate)"
+  FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed
+daemon shutting down"
+  local out; out=$(run_crew_state "$d" feat-ci-orphan-duplicate)
+  assert_contains "$out" "state: failed" "duplicate-step orphaned ci evidence must stay failed"
+  assert_not_contains "$out" "state: done" "duplicate-step orphaned ci evidence must not reclassify"
+  pass "duplicate-step orphaned ci evidence stays failed"
 }
 
 test_terminal_failed_ci_genuine_red_stays_failed() {
@@ -2707,6 +2781,8 @@ test_terminal_passed
 test_terminal_failed
 test_terminal_failed_ci_orphan_after_green_reads_done
 test_terminal_failed_ci_orphan_status_only_reads_done
+test_terminal_failed_ci_orphan_truncated_stays_failed
+test_terminal_failed_ci_orphan_duplicate_step_stays_failed
 test_terminal_failed_ci_genuine_red_stays_failed
 test_terminal_failed_ci_orphan_second_failed_step_stays_failed
 test_terminal_failed_push_reads_delivery_failure

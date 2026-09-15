@@ -408,6 +408,58 @@ nm_steps_declared_count() {
 
 NM_VALIDATION_STEPS="review test document lint"
 
+NM_DELIVERY_STEPS="push pr"
+NM_EXPECTED_STEPS="intent rebase review test document lint push pr ci"
+
+# Name of the delivery step a terminal failed run stopped at, set only by
+# nm_failed_run_is_delivery_failure below.
+NM_DELIVERY_FAILED_STEP=""
+
+nm_step_is_delivery() {  # <step>
+  local candidate
+  for candidate in $NM_DELIVERY_STEPS; do
+    [ "$candidate" = "$1" ] && return 0
+  done
+  return 1
+}
+
+nm_step_is_expected() {  # <step>
+  local candidate
+  for candidate in $NM_EXPECTED_STEPS; do
+    [ "$candidate" = "$1" ] && return 0
+  done
+  return 1
+}
+
+nm_steps_are_complete() {
+  local rows row rest step declared_rows parsed_rows seen_steps="" expected
+  rows=$(nm_steps_rows)
+  [ -n "$rows" ] || return 1
+  declared_rows=$(nm_steps_declared_count)
+  case "$declared_rows" in ''|*[!0-9]*) return 1 ;; esac
+  parsed_rows=$(printf '%s\n' "$rows" | awk 'NF { count++ } END { print count + 0 }')
+  [ "$declared_rows" -eq "$parsed_rows" ] || return 1
+  while IFS= read -r row; do
+    row=$(trim "$row")
+    [ -n "$row" ] || continue
+    step=$(trim "${row%%,*}")
+    nm_step_is_expected "$step" || return 1
+    case " $seen_steps " in
+      *" $step "*) return 1 ;;
+    esac
+    seen_steps="$seen_steps $step"
+  done <<EOF
+$rows
+EOF
+  for expected in $NM_EXPECTED_STEPS; do
+    case " $seen_steps " in
+      *" $expected "*) ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+
 nm_validation_steps_complete() {
   local rows row rest step status saw_review=0 saw_test=0 saw_document=0 saw_lint=0 expected
   rows=$(nm_steps_rows)
@@ -467,6 +519,7 @@ nm_run_activity_is_recent() {
 nm_failed_run_is_green_held_ci() {
   local rows row rest step status saw_ci_failed
   nm_validation_steps_complete || return 1
+  nm_steps_are_complete || return 1
   rows=$(nm_steps_rows)
   [ -n "$rows" ] || return 1
   saw_ci_failed=0
@@ -511,29 +564,6 @@ nm_reclassify_failed_run_as_held_green() {
 # means the work itself is wrong. `ci` is deliberately NOT in this set: a red
 # check is a verdict on the code, not a transport failure, and the orphaned-ci
 # case above already owns the one shape where a ci failure is not a verdict.
-NM_DELIVERY_STEPS="push pr"
-NM_EXPECTED_STEPS="intent rebase review test document lint push pr ci"
-
-# Name of the delivery step a terminal failed run stopped at, set only by
-# nm_failed_run_is_delivery_failure below.
-NM_DELIVERY_FAILED_STEP=""
-
-nm_step_is_delivery() {  # <step>
-  local candidate
-  for candidate in $NM_DELIVERY_STEPS; do
-    [ "$candidate" = "$1" ] && return 0
-  done
-  return 1
-}
-
-nm_step_is_expected() {  # <step>
-  local candidate
-  for candidate in $NM_EXPECTED_STEPS; do
-    [ "$candidate" = "$1" ] && return 0
-  done
-  return 1
-}
-
 # 0 when a terminal FAILED run passed every validation step and failed only
 # while delivering. Requires the exact shape, all on positive evidence: a
 # steps[] table where every step before the failure completed, exactly one step
@@ -546,26 +576,18 @@ nm_step_is_expected() {  # <step>
 # only read, and the run was recorded with the same "run failed" string as a run
 # whose validation failed.
 nm_failed_run_is_delivery_failure() {
-  local rows row rest step status seen_failure=0 declared_rows parsed_rows seen_steps="" expected
+  local rows row rest step status seen_failure=0
   NM_DELIVERY_FAILED_STEP=""
   nm_validation_steps_complete || return 1
+  nm_steps_are_complete || return 1
   rows=$(nm_steps_rows)
   [ -n "$rows" ] || return 1
-  declared_rows=$(nm_steps_declared_count)
-  case "$declared_rows" in ''|*[!0-9]*) return 1 ;; esac
-  parsed_rows=$(printf '%s\n' "$rows" | awk 'NF { count++ } END { print count + 0 }')
-  [ "$declared_rows" -eq "$parsed_rows" ] || return 1
   while IFS= read -r row; do
     row=$(trim "$row")
     [ -n "$row" ] || continue
     step=$(trim "${row%%,*}")
     rest=${row#*,}
     status=$(strip_quotes "$(trim "${rest%%,*}")")
-    nm_step_is_expected "$step" || { NM_DELIVERY_FAILED_STEP=""; return 1; }
-    case " $seen_steps " in
-      *" $step "*) NM_DELIVERY_FAILED_STEP=""; return 1 ;;
-    esac
-    seen_steps="$seen_steps $step"
     if [ "$seen_failure" = 1 ]; then
       case "$status" in
         pending|skipped) continue ;;
@@ -584,12 +606,6 @@ nm_failed_run_is_delivery_failure() {
   done <<EOF
 $rows
 EOF
-  for expected in $NM_EXPECTED_STEPS; do
-    case " $seen_steps " in
-      *" $expected "*) ;;
-      *) NM_DELIVERY_FAILED_STEP=""; return 1 ;;
-    esac
-  done
   [ "$seen_failure" = 1 ]
 }
 
