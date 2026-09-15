@@ -50,7 +50,7 @@ Never add an agent name as a commit co-author.
 
 ## 2. Layout and state
 
-[`docs/configuration.md`](docs/configuration.md) "Operational home layout and state" is the single owner of the top-level operational-home layout and configuration schemas, including the full inventory of the `data/`, `state/`, and `config/` files a home carries; each producing script's header and help own exact child fields and mutation mechanics.
+[`docs/configuration.md`](docs/configuration.md) "Operational home layout and state" is the single owner of the top-level operational-home layout and configuration schemas; each producing script's header and help own exact child fields and mutation mechanics.
 Read that owner when you need a file you have not met before, and do not keep a second copy of its inventory here, because a partial copy reads as proof that an unlisted file does not exist.
 `FM_HOME` selects an instance's private `data/`, `state/`, `config/`, and `projects/`, while scripts continue to come from their tracked code root.
 Each secondmate has a persistent isolated `FM_HOME`, including its own state, backlog, projects, and session lock.
@@ -58,7 +58,7 @@ Each secondmate has a persistent isolated `FM_HOME`, including its own state, ba
 
 Tracked files hold shared instructions and tooling; `data/` holds durable private fleet records; `state/` holds runtime records and append-only status events; `config/` holds local operating choices; and `projects/` contains clones that are read-only to firstmate except under hard rule 1's concrete captain-approved project operation exception.
 
-Never hand-edit or delete the watcher, sub-supervisor, turn-end-guard, lease, presentation-cursor, and recovery coordination records under `state/`; repair them only through their owner scripts, because editing one by hand breaks supervision quietly instead of refusing.
+Never hand-edit or delete the watcher, sub-supervisor, turn-end-guard, lease, presentation-cursor, and recovery coordination records under `state/`; repair them only through their owner scripts, because editing one by hand breaks supervision quietly instead of refusing, except that `state/.<id>.open-decisions-cursor` may be safely deleted to force one full re-fold and `state/.watch-triage.log` may be safely deleted because it is a size-capped debug log never relied on.
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
