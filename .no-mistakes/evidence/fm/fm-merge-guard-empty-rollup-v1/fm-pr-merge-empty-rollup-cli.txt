@@ -1,0 +1,19 @@
+$ bin/fm-pr-merge.sh task-x1 https://github.com/example/repo/pull/120
+exit=1
+--- stderr ---
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+error: refusing to merge https://github.com/example/repo/pull/120
+  - the pull request has no checks at all, so no check is green
+error: these checks are not green: (no checks)
+--- stdout ---
+armed: state/task-x1.check.sh
+--- mocked gh calls ---
+pr view https://github.com/example/repo/pull/120 --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup
+--- merge-attempt check ---
+gh pr merge calls: 0
